@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://custom-animated-video/storyboard_schema.json",
+  "title": "storyboard.json — shot-by-shot director plan",
+  "type": "object",
+  "required": ["shots"],
+  "properties": {
+    "title": { "type": "string" },
+    "fps": { "type": "integer", "default": 24 },
+    "aspect": { "enum": ["16:9", "9:16", "1:1"], "default": "16:9", "description": "16:9 = 1920x1080, 9:16 = 1080x1920. --aspect on the CLI overrides." },
+    "duration_sec": { "type": "number", "description": "defaults to the voiceover duration from audio_timeline.json" },
+    "audio_timeline": { "type": "string", "description": "path relative to this file" },
+    "drawers": { "type": "string", "description": "scene_drawers.js path relative to this file (or pass --drawers)" },
+    "subtitles": { "type": "boolean", "default": false },
+    "post": { "type": "boolean", "default": true, "description": "false disables the style post stack (debug only)" },
+    "shots": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["start_sec", "end_sec", "scene"],
+        "properties": {
+          "id": { "type": "string" },
+          "start_sec": { "type": "number" }, "end_sec": { "type": "number", "description": "shots must tile the timeline: next.start_sec == this.end_sec" },
+          "scene": { "type": "string", "description": "key registered by scene_drawers.js via CAV.registerScenes" },
+          "mood": { "type": "string", "description": "one of the style's lighting_moods (exactly one per shot)" },
+          "camera": {
+            "type": "object",
+            "properties": {
+              "preset": { "enum": ["static", "wide_establishing", "medium_tracking", "over_shoulder", "close_up_bust", "low_angle_hero", "slow_push_in"] },
+              "zoom": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[start, end] override" },
+              "rot": { "type": "array", "items": { "type": "number" }, "description": "[start, end] degrees" },
+              "tilt": { "type": "array", "items": { "type": "number" }, "description": "[start, end]; + looks up (far layers sink)" },
+              "from": { "type": "object", "description": "explicit {x,y,zoom,rot,tilt} at shot start (world units)" },
+              "to": { "type": "object" },
+              "subject": { "type": "array", "description": "[x, y, headY] to track instead of scene.subject(F)" },
+              "offset": { "type": "array", "description": "[dx, dy] world-unit nudge" },
+              "direction": { "type": "number", "description": "+1 / -1: drift direction for wide_establishing" },
+              "ease": { "type": "string" }, "hold": { "type": "boolean", "description": "false disables the >=12-frame start/end holds" },
+              "breath": { "type": "number" }, "clamp": { "type": "boolean" }
+            }
+          },
+          "transition_in": {
+            "type": ["object", "null"],
+            "properties": { "type": { "enum": ["cut", "crossfade", "dissolve", "dip", "dip_to_black", "flash", "wipe"] }, "frames": { "type": "integer" }, "color": { "type": "string" } }
+          },
+          "params": { "type": "object", "description": "free-form, handed to the drawers as F.params" },
+          "parallax": { "type": "object", "description": "per-shot override of layer depths" },
+          "haze": { "type": "object", "description": "per-shot override of per-layer haze" },
+          "speaker": { "type": ["string", "null"], "description": "who is speaking on screen (drives the QA dialogue pick; drawers read F.mouth)" },
+          "beat": { "type": "string", "description": "director's note: why this shot, which line / pause it serves" }
+        }
+      }
+    },
+    "sfx_events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": { "enum": ["footstep", "whoosh", "cloth", "rustle", "chime", "bell", "swell", "transition", "riser"] },
+          "frame": { "type": "integer", "description": "frame-accurate placement (preferred for footfalls)" },
+          "t_sec": { "type": "number", "description": "alternative to frame. For swells the sound STARTS here and peaks at t_sec + duration_sec — put the peak on the cut." },
+          "surface": { "enum": ["stone", "wood", "grass", "gravel"] },
+          "variant": { "enum": ["temple_bell", "chime", "singing_bowl"] },
+          "duration_sec": { "type": "number" },
+          "gain_db": { "type": "number" },
+          "pan": { "type": "number", "minimum": -1, "maximum": 1 },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "ambience": {
+      "type": "array",
+      "items": { "type": "object", "properties": { "start_sec": { "type": "number" }, "end_sec": { "type": "number" }, "bed": { "enum": ["river", "wind", "rain", "temple_hum", "city_hum", "night", "none"] }, "gain_db": { "type": "number" } } },
+      "description": "omit to derive one bed per shot from the style's audio_palette.mood_beds"
+    },
+    "bgm": {
+      "type": "object",
+      "properties": {
+        "mode": { "enum": ["auto", "procedural", "none"], "description": "auto = --bgm file > bgm.path > assets/bgm match > procedural drone" },
+        "path": { "type": "string" }, "gain_db": { "type": "number" }, "root_hz": { "type": "number" },
+        "mode_override": { "enum": ["warm", "dark", "mystic", "bright"] }
+      }
+    }
+  }
+}

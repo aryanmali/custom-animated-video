@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://custom-animated-video/style_schema.json",
+  "title": "Universal style_bible.json contract (normalized form)",
+  "description": "What render_frames.js, sfx_synth.py and mix_audio.py read. You never need to author this form by hand: scripts/normalize_style.py converts ANY style bible into it (see x-input-aliases) and fills every optional field with defaults. Hand-written bibles only need a palette; everything else is optional.",
+  "type": "object",
+  "required": ["_normalized", "palette", "gradients", "lighting_moods", "default_mood", "strokes", "texture_post", "motion_rules", "subtitles", "audio_palette"],
+  "x-input-aliases": {
+    "palette": ["palette", "<N>_colour_and_lighting_architecture.palette (groups such as primary_fills / shadow_tones / highlight_accents / ink_strokes are flattened to name -> hex and also kept in palette_groups)"],
+    "gradients": ["gradients", "palette.atmosphere_gradients", "<colour section>.palette.atmosphere_gradients"],
+    "lighting_moods": ["lighting_moods", "moods", "<colour section>.moods"],
+    "strokes": ["strokes", "<N>_linework_and_stroke_physics (line_weights_px, taper, weight_bias '1.6x heavier', line_boil, outline_colour_rules)"],
+    "texture_post": ["texture_post", "<N>_texture_and_post_processing"],
+    "proportions": ["proportions", "<N>_character_and_costume_design.proportions"],
+    "motion_rules": ["motion_rules", "<N>_motion_and_temporal_grammar (frame_rate, cadence on twos/ones, walk_cycle, secondary_motion.cloth 'N-M segments, damping a-b')"],
+    "architecture / nature / characters / shading": ["passed through verbatim from the matching numbered sections for the scene-drawer author"],
+    "audio_palette": ["audio_palette (optional, new)"]
+  },
+  "$defs": {
+    "hex": { "type": "string", "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" },
+    "colorRef": { "type": "string", "description": "hex, palette name, 'mood.<field>', 'ink.<kind>' or 'gradient[i]'" },
+    "range": { "type": "object", "properties": { "min": { "type": "number" }, "max": { "type": "number" } } },
+    "mood": {
+      "type": "object",
+      "required": ["sky", "key", "key_dir_deg", "shadow_tint", "rim", "ink"],
+      "properties": {
+        "sky": { "type": "string", "description": "name of a gradient in `gradients` (a list of hex is also accepted on input and is registered as '<mood>_sky')" },
+        "key": { "$ref": "#/$defs/hex", "description": "the ONE dominant key-light colour" },
+        "key_dir_deg": { "type": "number", "description": "screen-space direction FROM the subject TOWARD the light: 0 = right, 90 = down, 180 = left, 270 = up (y grows downward). 200 = low light from the left." },
+        "shadow_tint": { "$ref": "#/$defs/hex", "description": "coloured shadow tint (never grey): cel shadows mix 35-55% toward it; vignette and grade lift toward it" },
+        "rim": { "$ref": "#/$defs/hex" },
+        "ink": { "$ref": "#/$defs/hex", "description": "line colour for this mood (never pure black)" },
+        "ambient": { "$ref": "#/$defs/hex" },
+        "glow": { "type": "boolean", "description": "true = practical lights bloom at full bloom.intensity" }
+      }
+    }
+  },
+  "properties": {
+    "_contract_version": { "const": "1.0" },
+    "_normalized": { "const": true },
+    "meta": { "type": "object", "properties": { "style_name": { "type": "string" }, "one_line": { "type": "string" }, "design_canvas": { "type": "object" } } },
+    "palette": { "type": "object", "additionalProperties": { "$ref": "#/$defs/hex" }, "description": "flat name -> hex. Always contains ink, paper, highlight, shadow, skin_light/mid/deep, hair (defaults if absent)." },
+    "palette_groups": { "type": "object", "additionalProperties": { "type": "object" } },
+    "gradients": { "type": "object", "additionalProperties": { "type": "array", "items": { "$ref": "#/$defs/hex" }, "minItems": 1 }, "description": "top -> bottom stops. Gradients are only for sky, water, glow halos and haze." },
+    "lighting_moods": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/mood" } },
+    "default_mood": { "type": "string" },
+    "strokes": {
+      "type": "object",
+      "properties": {
+        "weights_px": { "type": "object", "description": "categories (silhouette_contour, interior_form_lines, fabric_fold_lines, hair_strands, jewelry_ornament, face_features.{eye_upper_lid,brow,nose,lips,lashes}, midground_architecture, distant_architecture, clouds) -> {min,max} px or a number; read with CAV.weight(kind, figureHeightPx, t)", "additionalProperties": true },
+        "reference_figure_height_px": { "type": "number", "default": 600 },
+        "scale_clamp": { "type": "array", "items": { "type": "number" }, "default": [0.5, 2.2] },
+        "taper": { "type": "object", "properties": { "end_ratio": { "type": "number", "default": 0.2 }, "peak_position": { "type": "number", "default": 0.4 } } },
+        "shadow_side_multiplier": { "type": "number", "default": 1.6 },
+        "lit_side_multiplier": { "type": "number", "default": 0.75 },
+        "line_boil": { "type": "object", "properties": { "characters_fx": { "type": "object", "properties": { "enabled": { "type": "boolean" }, "rate_hz": { "type": "number" }, "amplitude_px": { "type": "number" } } }, "backgrounds": { "type": "object" } } },
+        "ink": { "type": "object", "additionalProperties": { "$ref": "#/$defs/hex" }, "description": "default, warm, detail, cool, gold, skin ..." }
+      }
+    },
+    "proportions": { "type": "object", "description": "free-form figure specs (heads_tall, landmarks, limb lengths); always has default_figure" },
+    "texture_post": {
+      "type": "object",
+      "properties": {
+        "order": { "type": "array", "items": { "enum": ["colour_grade", "color_grade", "bloom", "atmospheric_haze", "chromatic_aberration", "paper_texture", "film_grain", "vignette"] } },
+        "paper_texture": { "type": "object", "properties": { "opacity": { "type": "number" }, "blend": { "type": "string" } } },
+        "film_grain": { "type": "object", "properties": { "sigma": { "type": "number" }, "reseed_every_frames": { "type": "integer" } } },
+        "vignette": { "type": "object", "properties": { "strength": { "type": "number" }, "radius": { "type": "number" }, "softness": { "type": "number" }, "tint": { "$ref": "#/$defs/colorRef" } } },
+        "bloom": { "type": "object", "properties": { "threshold": { "type": "number" }, "radius_px": { "type": "number" }, "intensity": { "type": "number" }, "intensity_no_glow": { "type": "number" }, "tint": { "$ref": "#/$defs/colorRef" } } },
+        "chromatic_aberration": { "type": "object", "properties": { "max_offset_px": { "type": "number" } } },
+        "colour_grade": { "type": "object", "properties": { "lift_amount": { "type": "number" }, "highlight_amount": { "type": "number" }, "saturation_boost": { "type": "number" } } },
+        "atmospheric_haze": { "type": "object", "description": "per parallax layer haze amount 0..1 (sky, far_bg, mid_bg, action_plane, foreground_frame); applied to each layer's own pixels toward the sky colour at that height" }
+      }
+    },
+    "motion_rules": {
+      "type": "object",
+      "properties": {
+        "frame_rate": { "type": "integer", "default": 24 },
+        "character_cadence_frames": { "type": "integer", "default": 2, "description": "2 = characters/FX on twos; camera always on ones" },
+        "easing": { "type": "object" },
+        "hold_frames_min": { "type": "integer", "default": 12 },
+        "walk_cycle": { "type": "object", "properties": { "frames_per_step": { "type": "integer" }, "stride_heads": { "type": "number" }, "bob_heads": { "type": "number" }, "arm_swing_deg": { "type": "number" }, "torso_lean_deg": { "type": "number" } } },
+        "cloth": { "type": "object", "properties": { "segments": { "type": "integer" }, "damping": { "type": "number" }, "wave_speed": { "type": "number" }, "wave_count": { "type": "number" } } },
+        "parallax_layers": { "type": "object", "properties": { "sky": { "type": "number" }, "far_bg": { "type": "number" }, "mid_bg": { "type": "number" }, "action_plane": { "type": "number" }, "foreground_frame": { "type": "number" } } }
+      }
+    },
+    "subtitles": {
+      "type": "object",
+      "properties": {
+        "font_family": { "type": "string" }, "font_weight": { "type": "integer" }, "size_px": { "type": "number" },
+        "fill": { "$ref": "#/$defs/colorRef" }, "outline": { "$ref": "#/$defs/colorRef" }, "highlight": { "$ref": "#/$defs/colorRef" },
+        "outline_px": { "type": "number" }, "max_words_per_line": { "type": "integer" }, "uppercase": { "type": "boolean" }
+      }
+    },
+    "audio_palette": {
+      "type": "object",
+      "properties": {
+        "ambient_bed": { "enum": ["auto", "river", "wind", "rain", "temple_hum", "city_hum", "night", "none"] },
+        "footstep_surface": { "enum": ["stone", "wood", "grass", "gravel"] },
+        "accent_chime": { "enum": ["temple_bell", "chime", "singing_bowl", "none"] },
+        "drone_root_hz": { "type": "number", "default": 110 },
+        "bgm_gain_db": { "type": "number", "default": -20 },
+        "ambience_gain_db": { "type": "number", "default": -27 },
+        "sfx_gain_db": { "type": "number", "default": -14 },
+        "duck_db": { "type": "number", "default": 15 },
+        "pause_swell_db": { "type": "number", "default": 3 },
+        "mood_beds": { "type": "object", "additionalProperties": { "type": "string" }, "description": "mood -> bed; auto-derived from mood names when absent" }
+      }
+    },
+    "shading": { "type": "object" }, "characters": { "type": "object" }, "architecture": { "type": "object" }, "nature": { "type": "object" },
+    "strictly_avoid": { "type": "array", "items": { "type": "string" } }
+  }
+}

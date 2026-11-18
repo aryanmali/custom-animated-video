@@ -1,0 +1,158 @@
+{
+  "title": "Every lamp back home (7 s integration test)",
+  "fps": 24,
+  "aspect": "16:9",
+  "duration_sec": 7.06,
+  "audio_timeline": "audio_timeline.json",
+  "drawers": "scene_drawers.js",
+  "subtitles": true,
+  "shots": [
+    {
+      "id": "s1_wide",
+      "start_sec": 0.0,
+      "end_sec": 3.55,
+      "scene": "ghat_dusk",
+      "mood": "diya_dusk",
+      "camera": {
+        "preset": "wide_establishing",
+        "direction": -1
+      },
+      "params": {
+        "pose": "walk",
+        "figureX": 1500,
+        "lampsBloom": true
+      },
+      "beat": "Opening: 'At dusk,' then a held 0.68 s pause (camera hold, lamps swell, bell) before 'the river carries every lamp back home.' Figure walks right-to-left toward the low sun.",
+      "speaker": null
+    },
+    {
+      "id": "s2_closeup",
+      "start_sec": 3.55,
+      "end_sec": 5.62,
+      "scene": "ghat_closeup",
+      "mood": "diya_dusk",
+      "camera": {
+        "preset": "close_up_bust",
+        "zoom": [
+          1.04,
+          1.1
+        ]
+      },
+      "transition_in": {
+        "type": "crossfade",
+        "frames": 10
+      },
+      "params": {},
+      "beat": "Reveal on the pause after 'home.': dialogue close-up, the figure says 'Walk slowly.' (lip sync), cloth and hair ripple in the river breeze.",
+      "speaker": "hero"
+    },
+    {
+      "id": "s3_hero",
+      "start_sec": 5.62,
+      "end_sec": 7.06,
+      "scene": "ghat_dusk",
+      "mood": "diya_dusk",
+      "camera": {
+        "preset": "low_angle_hero",
+        "zoom": [
+          1.5,
+          1.62
+        ]
+      },
+      "transition_in": {
+        "type": "crossfade",
+        "frames": 8
+      },
+      "params": {
+        "pose": "hold_diya",
+        "figureX": 1240,
+        "arch": false
+      },
+      "beat": "Climax: low-angle hero shot holding a diya against the shikhara and sky, 'The light remembers you.' Ends on the bell.",
+      "speaker": null
+    }
+  ],
+  "sfx_events": [
+    {
+      "frame": 6,
+      "type": "footstep",
+      "surface": "stone",
+      "gain_db": -16
+    },
+    {
+      "frame": 18,
+      "type": "footstep",
+      "surface": "stone",
+      "gain_db": -17.5
+    },
+    {
+      "frame": 30,
+      "type": "footstep",
+      "surface": "stone",
+      "gain_db": -16
+    },
+    {
+      "frame": 42,
+      "type": "footstep",
+      "surface": "stone",
+      "gain_db": -17.5
+    },
+    {
+      "frame": 54,
+      "type": "footstep",
+      "surface": "stone",
+      "gain_db": -16
+    },
+    {
+      "frame": 66,
+      "type": "footstep",
+      "surface": "stone",
+      "gain_db": -17.5
+    },
+    {
+      "frame": 78,
+      "type": "footstep",
+      "surface": "stone",
+      "gain_db": -16
+    },
+    {
+      "t_sec": 0.62,
+      "type": "chime",
+      "variant": "temple_bell",
+      "gain_db": -15,
+      "note": "first dramatic pause: lamps swell"
+    },
+    {
+      "t_sec": 3.45,
+      "type": "whoosh",
+      "gain_db": -20,
+      "note": "cloth rustle into the close-up"
+    },
+    {
+      "t_sec": 4.87,
+      "type": "swell",
+      "duration_sec": 0.75,
+      "gain_db": -14,
+      "note": "transition swell across the pause; peaks on the 5.62 s cut (t_sec + duration_sec)"
+    },
+    {
+      "t_sec": 6.15,
+      "type": "chime",
+      "variant": "temple_bell",
+      "gain_db": -13,
+      "note": "ending bell"
+    }
+  ],
+  "ambience": [
+    {
+      "start_sec": 0.0,
+      "end_sec": 7.06,
+      "bed": "river",
+      "gain_db": -26
+    }
+  ],
+  "bgm": {
+    "mode": "auto",
+    "gain_db": -19
+  }
+}

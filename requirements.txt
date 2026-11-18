@@ -1,0 +1,7 @@
+# custom-animated-video — everything installs into the skill's private runtime (<skill>/.runtime/venv) automatically
+# on first run of scripts/build_video.py; you never need to pip install this yourself. Python >= 3.9.
+numpy>=1.24
+scipy>=1.10
+faster-whisper>=1.0     # forced alignment; the Whisper model is cached in .runtime/hf
+playwright>=1.45        # frame renderer: bundles its own Node.js + playwright-core (no system Node needed)
+# imageio-ffmpeg        # installed on demand only if the system ffmpeg is missing or lacks libx264/sidechaincompress/loudnorm
