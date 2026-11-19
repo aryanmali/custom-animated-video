@@ -1,12 +1,14 @@
 ---
 name: custom-animated-video
-description: Turn a script + voiceover + ANY style_bible.json into a finished, frame-by-frame animated MP4 with lip sync, tapered-ink cel art, rim light, cloth physics, parallax camera moves, styled subtitles, style-matched foley/ambience and an auto-ducked, -14 LUFS mix. Use when the user asks to animate a voiceover/narration, make an animated short, explainer or YouTube Short from a script and audio, render a story "in my style", or build a video from a style bible. Renders locally (Playwright + HTML5 canvas + FFmpeg + numpy/scipy, faster-whisper for alignment); no cloud video APIs.
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep
+description: Turn a script + voiceover + ANY style_bible.json into a finished, frame-by-frame animated MP4 with lip sync, tapered-ink cel art, rim light, cloth physics, parallax camera moves, styled subtitles, style-matched foley/ambience and an auto-ducked, -14 LUFS mix. Use when the user asks to animate a voiceover/narration, make an animated short, explainer or YouTube Short from a script and audio, render a story "in my style", or build a video from a style bible. Renders locally (Playwright + HTML5 canvas + FFmpeg + numpy/scipy, faster-whisper for alignment); no cloud video APIs. Orchestrates specialised subagents (cav-*), each on its own model and effort.
+allowed-tools: Agent, Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion
 ---
 
-# custom-animated-video
+# custom-animated-video: orchestrator
 
-`SKILL_DIR` = the folder holding this file. Runtime inputs, all per project — **never bake a style into the core**:
+`SKILL_DIR` = the folder holding this file. You are the **orchestrator**: you keep the user's intent, delegate each stage to a
+specialised subagent, and run the review gate yourself. **Never bake a style into the core**; every style value comes from the
+user's `style_bible.json`.
 
 | flag | meaning |
 |---|---|
@@ -16,205 +18,141 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 | `--bgm` | optional music file (else asset library, else procedural modal drone) |
 | `--aspect` | `16:9` (1920×1080, default) or `9:16` (1080×1920) |
 | `--subtitles` | `true` / `false` |
-| `--out` | output `.mp4` (its folder becomes the work dir unless `--workdir`) |
+| `--out` | output `.mp4` (its folder is `WORK` unless `--workdir`) |
 
-Pipeline: `normalize_style.py → analyze_audio.py → [you: storyboard.json + scene_drawers.js] → sfx_synth.py → mix_audio.py → render_frames.js (per shot → clip, frames deleted) → concat + mux → QA gate → auto-clean → REVIEW GATE (ship it / change it)`, all driven by `scripts/build_video.py`.
+Pipeline (all driven by `scripts/build_video.py`): `normalize_style → analyze_audio → storyboard.json → scene_drawers.js →
+sfx_synth → mix_audio → render_frames (per shot → clip, frames deleted) → concat + mux → QA frames → auto-clean → review gate`.
 
----
+## Agents and routing
 
-## 0 · Self-contained runtime (nothing to install by hand)
+| stage | subagent | model · effort | job |
+|---|---|---|---|
+| 1 ingest | `cav-ingest` | haiku · low | runtime check, `--stage analyze`, writes `WORK/director_brief.json` |
+| 2 direct | `cav-director` | sonnet · medium | `storyboard.json` (7 director rules); shot-only updates |
+| 3 draw | `cav-artist` (`cav-artist-fast` in fast/budget mode) | opus · high (sonnet · high) | `scene_drawers.js` (6 art rules) + preview verify; targeted fixes |
+| 4 build | `cav-builder` | haiku · low | full / `--only` / `--apply-review` / `--ship`, audio telemetry |
+| 5 QA | `cav-qa-critic` | sonnet · medium | inspects `WORK/qa/`, returns `STATUS: PASS|FAIL` + tickets |
 
-Run every command with plain `python3` (>= 3.9). On first use `build_video.py` creates a **private runtime** in
-`$SKILL_DIR/.runtime/` and re-launches itself inside it: venv (numpy, scipy, faster-whisper, playwright — which bundles
-its own Node.js), the Whisper model (`hf/`), Chromium only if no Chrome/Edge is installed (`browsers/`), and a bundled
-ffmpeg only if the system one is missing or lacks libx264/sidechaincompress/loudnorm. Takes 1–3 min once; needs
-internet. It never uses or modifies any other Python env, Node install or cache. Shipping deletes it again.
-```bash
-python3 "$SKILL_DIR/scripts/build_video.py" --check     # bootstraps if needed, then reports READY
-```
+Use fast mode **only if the user asked** for fast/budget/cheap/draft. Never silently downgrade the artist.
 
-## 1 · Ingest & validate
+### Orchestration rules
+* **Single-shot, stateless subagents.** Prompt caches expire after ~5 min and the user review gate can take far longer, so
+  never keep a subagent alive across a gate and never `SendMessage` to a finished one. Spawn a **fresh** subagent per task
+  with explicit absolute paths and a concise structured brief (below). Run independent work in one message.
+* **Brief format** (every delegation): `SKILL_DIR`, `WORK`, the exact `--script/--audio/--style/--aspect/--subtitles/--bgm/--out`
+  values, the task, the input files to read, the files to write, and the shape of the reply you need.
+* **Keep your own context small:** read subagent summaries, not raw files. Never `Read` `audio_timeline.json` (huge per-frame
+  arrays). Use `WORK/director_brief.json`.
+* If a `cav-*` subagent type is not available yet in this session (agents registered mid-session may not be listed until a
+  restart), **keep the model routing**: call `Agent(subagent_type="general-purpose", model=<m>)` with `model` = `haiku` for
+  `cav-ingest`/`cav-builder`, `sonnet` for `cav-director`/`cav-artist-fast`/`cav-qa-critic`, `opus` for `cav-artist`, and tell it
+  to first read `$SKILL_DIR/agents/<agent-name>.md` and follow it as its instructions, then give the usual brief.
+* Make sure the user supplied script, voiceover and style bible; ask (AskUserQuestion) only for what is missing.
 
-```bash
-python3 "$SKILL_DIR/scripts/build_video.py" --script script.txt --audio voiceover.wav --style style_bible.json \
-        --out project/final_video.mp4 --stage analyze
-```
-Writes into the work dir: `style.normalized.json`, `audio_timeline.json`, `storyboard.draft.json`. Then **read**:
-* the normalizer summary (moods, colours) and any warnings — fix the bible if a mood/colour is missing;
-* every segment's `[start - end] text`, every `dramatic_pause` (≥ 0.55 s), and `alignment_coverage` (< 0.6 means
-  the script doesn't match the take — fix the script before going on);
-* `audio_timeline.json` fields you will use: `segments[].phrases`, `words[]` (start_sec/end_sec), `pauses[]`
-  (`start_frame`, `after_word`), `envelope[]` (0..1 per frame), `mouth[]` (`closed|open_small|open_wide`), `viseme[]`.
-
-Read the style bible itself too (palette names, moods, strokes, proportions, architecture/nature prose, `strictly_avoid`).
-
-## 2 · Direct the film → `storyboard.json` (schema: `references/storyboard_schema.json`)
-
-Start from `storyboard.draft.json`, then make it purposeful. **Director rules:**
-1. **Shots tile the timeline** (`next.start_sec == prev.end_sec`); cut **inside pauses**, ideally at the pause midpoint,
-   never mid-word. A shot is 1.5–6 s; hold ≥ 12 frames at shot starts/ends (the rig does this).
-2. **Vary the frame size with the story**: open `wide_establishing` → `medium_tracking` → `close_up_bust` for the
-   emotional/dialogue line → release wide or `low_angle_hero` for the climax; `slow_push_in` for revelations,
-   `over_shoulder` for listening. Never two identical presets back-to-back unless it is a deliberate continuation.
-3. **Every dramatic pause earns something**: a camera hold, a reveal (lamps swell, a cut, a transition), a chime,
-   and the BGM swell (automatic). Note it in the shot's `beat`.
-4. **One mood per shot** from the user's `lighting_moods`; change mood only on a story turn (and cut on it).
-5. **Transitions**: `crossfade` 8–12 frames across a pause for gentle beats, `cut` for energy, `dip_to_black` for time
-   jumps, `flash` for impact. Put them where a pause is.
-6. **Sound design (`sfx_events`)** — frame-accurate:
-   * footsteps on every heel strike of a walking character (compute frames from your walk rig: one step every
-     `walk_cycle.frames_per_step` frames, at the frames where a foot plants), `surface` from the ground you drew
-     (or `audio_palette.footstep_surface`); alternate gain ±1.5 dB;
-   * `whoosh` on fast camera/cloth moves and into close-ups, `chime` (`temple_bell|chime|singing_bowl`) on reveals
-     and endings, `swell` before big cuts: it **starts** at `t_sec` and **peaks at `t_sec + duration_sec`** — put the
-     peak on the cut;
-   * `ambience` beds per location (`river|wind|rain|temple_hum|city_hum|night`), ~−24…−28 dB; `bgm.gain_db` ~−18…−21.
-7. Set `speaker` on shots where an on-screen character mouths the narration.
-
-## 3 · Compile project art → `scene_drawers.js`
-
-A plain browser script that calls `CAV.registerScenes({...})`. Study `examples/test_project/scene_drawers.js`
-(full ghat scene, walking rig, lip-synced bust) and `examples/generic_drawers.js` (minimal, style-only).
-
-```js
-(function () {
-  const { c, mix, rgba, shadowOf, lightOf, rng, noise1, hash, clamp, lerp, TAU } = CAV;
-  CAV.registerScenes({
-    my_scene: {
-      subject(F) { return { x, y, headY, facing }; },        // camera tracking target (world units)
-      parallax: { mid_bg: 0.45 },                          // optional per-scene depth overrides
-      layers: {                                            // back -> front; each gets its own parallax + haze
-        sky(ctx, F) {}, far_bg(ctx, F) {}, mid_bg(ctx, F) {}, action_plane(ctx, F) {}, foreground_frame(ctx, F) {},
-        far_bg_lights(ctx, F) {},                          // "<layer>_lights": emissive pass, same depth, AFTER haze
-      },
-      overlay(ctx, F) {},                                  // screen space: particles, flashes
-    },
-  });
-})();
-```
-
-**Coordinates.** World units = the output frame for the chosen aspect (`F.W×F.H`: 1920×1080 or 1080×1920); `F.u` =
-short side / 1080. The camera transforms each layer; paint backgrounds with ≥ 400 px margins past every edge
-(camera drift, zoom < 1 on far layers, rotation). Compose for `F.aspect` (9:16 needs vertical stacking).
-
-**Frame object `F`.** `i, t, fps, tShot, shotProgress, ic/tc/tcShot` (character time **on twos** — animate
-characters/FX/cloth/flames with `tc`, camera with `t`), `W, H, u, aspect, params, mood {sky,key,key_dir_deg,
-shadow_tint,rim,ink,ambient,glow,name}, S` (normalized style), `light` (unit vector toward the key), `env` (0..1),
-`mouth, viseme, speaking, word, segment, pause` (current dramatic pause or null), `cam, layer, depth`.
-
-**Shader primitives (use them; they encode the style rules):**
-| call | does |
-|---|---|
-| `CAV.drawTaperedStroke(ctx, pts, baseWidth, color, taperStart, taperEnd, shadowBias, opts)` | variable-width ink ribbon: swells to `strokes.taper.peak_position`, tips at 0.2×, round caps; `shadowBias` 1.6 = heavier on the side away from the key, thinner on the lit side (flip-aware). `opts.boil` overrides line boil |
-| `CAV.applyRimLight(ctx, silhouette, keyAngleDeg, rimColor, intensity, {width:3-5, boost})` | crisp rim crescent on light-facing edges, `screen`-composited. `silhouette` = path builder or **array of builders** (one per body part: never one path with mixed winding) |
-| `CAV.celShade(ctx, pathFn | [fns], base, shadow|null|false, keyAngleDeg, offset)` | 2-tone hard cel: base + coloured crescent shadow (shape minus itself shifted toward the light). `null` shadow = `shadowOf(base)` |
-| `CAV.stepClothChain(chain, windAngle, windStrength, stepImpulse)` → `chain.points` | travelling-sine cloth/hair (scarf, uttariya, cape, dhoti pleat, hair strand); pure function of `chain.t`/`F.tc` |
-| `CAV.drawClothChain(ctx, chain, {width,endWidth,fill,shadow,border:{color,width,inner},folds,ink})` | renders the chain as a cel-shaded fabric ribbon with zari border and fold lines |
-| `CAV.drawLipSyncMouth(ctx, F.S, F.mouth, {mood, size, viseme:F.viseme})` | mouth at ctx origin; translate/rotate/scale to the face first (scale x ≈ 0.6 for 3/4 view) |
-| `CAV.applyPostProcessing(ctx, style, i, mood)` | grade, bloom, CA, paper, grain, vignette per `texture_post.order` — called by the runtime; don't call it yourself |
-| helpers | `CAV.weight(kind, figureH, t)`, `c(name)`, `mix`, `rgba`, `shadowOf(col, amt)`, `lightOf`, `paintSky(ctx, stops, x,y,w,h, {steps})`, `glow`, `reflection`, `particles(ctx,F,{kind:'petal'|'ember'|'dust'|'rain'})`, `inkShape(ctx, pts, {fill,width,ink})`, `chipped(pts, amp, seed)`, `limb(ctx,a,b,r1,r2)`, `polyPath`, `catmull`, `withBoil(fn)`, `rng(seed)`, `noise1`, `hash`, `ease.*` |
-
-**Art rules (non-negotiable):**
-1. Use **only** the user's palette names, mood colours and `CAV.weight()` stroke weights. No hard-coded hex unless the
-   bible lacks a needed hue; then derive it with `mix/shadowOf/lightOf` from bible colours.
-2. One key light per shot = `F.mood.key_dir_deg`. Every shadow is coloured (`shadowOf`), never grey; ink is the mood
-   ink, never `#000`. Respect `strictly_avoid`.
-3. **Characters**: build a rig function (joints from `S.proportions`), lay parts back→front in the bible's layering
-   order, `celShade` each part, ink silhouettes with `drawTaperedStroke(..., 1.6)`, then one `applyRimLight(parts)`.
-   Wrap character/FX drawing in `CAV.withBoil(() => …)` (backgrounds never boil). Walks: plant the stance foot in world
-   space (IK) — no foot sliding. Faces facing left/right: compute features from a `forward = facing` sign.
-4. **Ground the architecture**: every building sits on something (plinth, steps, bank, street) with a contact line or
-   cast shadow; far layers are hazed automatically (`texture_post.atmospheric_haze`) — put lamps/windows in
-   `<layer>_lights` so they stay bright; give water reflections; add `chipped()` edges, crack ticks, niches; frame
-   with a `foreground_frame` element (arch, pillar, fronds, garland) that slides faster than the subject.
-5. Something always drifts (`particles`), flames flicker on twos, cloth/hair always move (`stepClothChain`).
-6. Determinism: no `Math.random()`/`Date` — use `rng(seed)`, `hash`, `noise1`. Frames render in parallel, in any order.
-
-**Iterate cheaply:** render 3–4 frames, look, fix, repeat (uses the private runtime; frames land in `WORK/preview_frames/`):
-```bash
-python3 "$SKILL_DIR/scripts/build_video.py" --script script.txt --audio voiceover.wav --style style_bible.json \
-        --storyboard storyboard.json --drawers scene_drawers.js --out project/final_video.mp4 --frames 30,110,160
-```
-Errors name the scene/layer/frame (`[scene ghat_closeup / layer action_plane / frame 110] …`).
-
-## 4 · Render & mix
+## Phase 0 · Register subagents and runtime
 
 ```bash
-python3 "$SKILL_DIR/scripts/build_video.py" --script script.txt --audio voiceover.wav --style style_bible.json \
-        --storyboard storyboard.json --drawers scene_drawers.js [--bgm music.mp3] --aspect 16:9 --subtitles true \
-        --out project/final_video.mp4
+AGENTS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/agents" && mkdir -p "$AGENTS_DIR" && for f in "$SKILL_DIR"/agents/cav-*.md; do cmp -s "$f" "$AGENTS_DIR/$(basename "$f")" || cp "$f" "$AGENTS_DIR/"; done
 ```
-* **Audio**: `sfx_synth.py` (asset library `./assets/sfx`, `./assets/bgm` first, procedural fallback) → `mix_audio.py`
-  (events at exact ms via `adelay`, `sidechaincompress` ducking calibrated to `audio_palette.duck_db` (15 dB), +3 dB
-  swells in pauses, two-pass `loudnorm` −14 LUFS / −1.5 dBTP). Stems are deleted after the mix.
-* **Video**: each shot renders to PNG frames → encoded to `clips/<n>_<id>.mp4` (x264 crf 16) → **frames deleted
-  immediately**; clips are concatenated with the master audio (`aac 192k`). `--preview` = half resolution.
-* **Incremental**: `build_state.json` hashes every shot and the mix; a rerun re-renders only what changed.
-  `--only s2,s3,audio` restricts a rerun to those targets (use it after editing drawers for specific shots — other
-  shots are accepted as-is). Shots whose cut points moved, and the shot after any re-rendered shot that crossfades from
-  it, are always re-rendered.
-* **Auto-clean** after every build: frames, stems, concat list and `__pycache__` are removed; the work dir keeps only
-  `final_video.mp4`, small clips/QA/JSON needed for quick changes.
-Check the printed lines: ducking within ±1 dB of target, ~−14 LUFS.
+(Portable on macOS and Linux. `build_video.py` also keeps them synced on every run; the line above guarantees it on the first
+turn.) The private runtime (`$SKILL_DIR/.runtime/`: venv, Whisper model, browser, ffmpeg if needed) is bootstrapped by
+`cav-ingest` via `build_video.py --check` (1–3 min once, internet needed; never touches other envs). Decide `WORK`
+(`dirname(--out)`) and `mkdir -p` it.
 
-## 5 · Mandatory visual QA gate (before you show the user anything)
+## Phase 1 · Ingest → `cav-ingest`
 
-`build_video.py` extracts the **opening**, **dialogue close-up** and **ending** frames to `WORK/qa/` (+ `contact_sheet.png`).
-**Read all three images** and check, fixing and re-rendering (`--only <shot>`) anything that fails:
-- [ ] rim light: a thin warm crescent on the light side only — no glowing internal seams, no blown-out outlines
-- [ ] tapered strokes: lines swell and taper, heavier on the shadow side; no uniform vector lines or black ink
-- [ ] composition: subject on a third, readable silhouette, ground contact, foreground frame, no empty frame edges
-- [ ] architecture grounded (base/steps/shadow), hazed with depth; lights bright
-- [ ] subtitles (if on): fully legible, inside the safe area, active word highlighted, not covering the face
-- [ ] faces point the way the body faces; mouths open on speech in the dialogue frame
-Spot-check motion with `--frames a,a+1,a+2,a+4` (drawings should change every 2 frames).
+Delegate. Expect `STATUS: ok|needs_user` and `WORK/director_brief.json`.
+* `alignment_coverage < 0.6` → the script does not match the take: **stop and ask the user** (fix script / confirm / provide a
+  new take). Spelling-only differences are fine.
+* A required mood/palette entry missing → ask whether to add it to the bible or accept the defaults.
+* Otherwise continue; surface warnings in your next user-facing message.
 
-## 6 · REVIEW GATE — always ask "Ship it or Change it?" (never skip, never decide for the user)
+## Phase 2 · Direct → `cav-director`
 
-Get the exact questions for this video (shot options are generated from the storyboard):
+Inputs: `WORK/director_brief.json`, `WORK/storyboard.draft.json`, `references/storyboard_schema.json`. Output
+`WORK/storyboard.json`. Sanity-check the reply (tiling, pause-midpoint cuts, 1.5–6 s shots, camera variety, sfx present).
+Not satisfied → one fresh `cav-director` call with specific corrections.
+
+## Phase 3 · Draw → `cav-artist` (or `cav-artist-fast`)
+
+Inputs: `WORK/storyboard.json`, `WORK/style.normalized.json`, the user's bible, plus the original CLI args for preview renders.
+Output `WORK/scene_drawers.js`, verified with a `--frames` preview (zero `[scene / layer / frame]` errors). The
+artist's job is art only; storyboard changes it needs are reported back to you for `cav-director`.
+
+## Phase 4 · Build → `cav-builder`
+
+Full build to `--out` (it passes `--no-review`; the gate is yours). Expect `BUILD: ok`, ducking within ±1 dB of target,
+≈ −14 LUFS, and `WORK/qa/` frames. On `failed`, route the named `[scene / layer / frame]` error to `cav-artist` (or a timing
+error to `cav-director`), then rebuild with `--only`.
+
+## Phase 5 · QA → `cav-qa-critic`
+
+Always run before the user sees anything. On `STATUS: FAIL`:
+1. Tickets with `target_file: scene_drawers.js` → fresh `cav-artist` (fix mode, ticket list in the brief).
+   Tickets with `storyboard.json` → fresh `cav-director` (targeted update), then `cav-artist` if scene keys changed.
+2. `cav-builder` with `--only <affected shot ids>`.
+3. Fresh `cav-qa-critic` on the new frames.
+**Max 2 auto-fix loops**; then tell the user what still fails and let them decide (continue to the review gate or direct a fix).
+
+## Phase 6 · REVIEW GATE (you, in the main session; never skip, never decide for the user)
+
 ```bash
-python3 "$SKILL_DIR/scripts/review.py" --questions --storyboard storyboard.json --video project/final_video.mp4
+python3 "$SKILL_DIR/scripts/review.py" --questions --storyboard WORK/storyboard.json --video project/final_video.mp4
 ```
-Ask with **AskUserQuestion**, at most three quick calls:
-1. **round1** — "Ship it or change it?" (tell them the video path and what the QA gate confirmed).
-2. If *Change it*: **round2** in ONE call — *Which parts?* (Visuals / Camera & editing / Subtitles / Sound, multi)
-   and *Which moments?* (Whole video or specific shots, multi).
-3. ONE call with the **round3** question for each selected part (multi-select; "Other" = free-text notes):
-   * Visuals → Character · Background · Colours & lighting · Motion
-   * Camera → Tighter framing · Wider framing · Calmer camera · Cut timing / transitions
-   * Subtitles → Turn them off · Bigger · Smaller · Move to the top
-   * Sound → Music quieter · Music louder · Effects quieter · Effects louder
+Ask with **AskUserQuestion**, at most three quick calls (tell them the video path and what QA confirmed):
+1. **round1** · "Ship it or change it?"
+2. If *Change it*, **round2** in ONE call: *Which parts?* (Visuals / Camera & editing / Subtitles / Sound, multi) and *Which
+   moments?* (Whole video or specific shots, multi).
+3. ONE call with the **round3** question for each selected part (multi; "Other" = free text):
+   Visuals → Character · Background · Colours & lighting · Motion; Camera → Tighter · Wider · Calmer · Cut timing/transitions;
+   Subtitles → Turn off · Bigger · Smaller · Move to top; Sound → Music quieter/louder · Effects quieter/louder.
 
-Write the answers to `WORK/review.json` (labels or keys both work):
+Write the answers to `WORK/review.json`:
 ```json
 {"decision": "change", "parts": ["visuals", "sound"], "shots": ["s2 3.5-5.6s"],
  "visuals": ["Character", "Motion"], "sound": ["Music quieter"],
  "notes": {"visuals": "face looks too long", "sound": "use ~/music/sitar.mp3"}}
 ```
-then run `python3 "$SKILL_DIR/scripts/build_video.py" --out project/final_video.mp4 --apply-review WORK/review.json`
-(inputs are remembered from the first build). It:
-* **applies parametric fixes itself** — framing tighter/wider/calmer, subtitles off/size/position, music/effects ±3 dB —
-  and rebuilds only the affected targets (sound → audio + remux only; camera → those shots; subtitles → all shots);
-* for **art tickets** (visuals, cut timing, free-text notes) it writes `review_plan.json`, prints what to change and the
-  exact `--only` rebuild command. Make those edits (scene_drawers.js / storyboard.json, only for the listed shots),
-  rebuild with that command, re-run the QA gate on the changed shots, then **go back to round 1**.
-Loop until the user picks *Ship it*. `storyboard.prev.json` holds the pre-change storyboard if they want to undo.
+Then:
+* **Parametric changes** (framing tighter/wider/calmer, subtitles off/size/position, music/effects ±3 dB) → `cav-builder`
+  with `--apply-review WORK/review.json`. It rebuilds only the affected targets (sound → audio + remux; camera → those shots;
+  subtitles → all shots).
+* **Art / cut tickets** (visuals, cut timing, free-text notes) → `--apply-review` also writes `WORK/review_plan.json` and
+  prints the exact `--only` command. Delegate **only the affected shots** to a fresh `cav-director` (cut timing/camera pacing)
+  and/or `cav-artist` (visuals), giving `review_plan.json` and the notes → `cav-builder --only <shots>` → `cav-qa-critic` on the
+  changed shots → **back to round 1**.
+Loop until *Ship it*. `storyboard.prev.json` holds the pre-change storyboard if the user wants to undo.
 
-## 7 · Ship it
+## Phase 7 · Ship → `cav-builder`
 
-```bash
-python3 "$SKILL_DIR/scripts/build_video.py" --out project/final_video.mp4 --ship
-```
-Keeps **only the final video** (plus the user's own inputs and the few-KB `storyboard.json` / `scene_drawers.js`
-recipe; add `--purge-recipe` to drop those too). Deletes every generated file (clips, QA frames, audio, timeline,
-state) **and the skill's private runtime** `$SKILL_DIR/.runtime/` (venv, model, browser, bundled ffmpeg) so the machine
-is left clean; `--keep-deps` keeps the runtime for another video soon. System tools (python3, ffmpeg, Chrome) are never
-touched. Deliver: the video path, its spec line, and what was freed.
+On *Ship it*, delegate `--ship` (`--keep-deps` if the user will make another video soon; `--purge-recipe` only if asked). It keeps
+only the final video (plus the user's inputs and the few-KB `storyboard.json` / `scene_drawers.js` recipe) and deletes every
+generated file and `$SKILL_DIR/.runtime/`. Tell the user: the video path, its spec line (resolution/fps/duration), and the disk
+space freed. System tools (python3, ffmpeg, Chrome) are never touched.
+
+---
+
+## Guarantees the subagents must preserve (full detail in their files)
+
+**Director:** shots tile; cuts at pause midpoints; 1.5–6 s; varied presets; `beat` on every pause; one mood/shot; transitions on
+pauses; `speaker` on lip-sync shots; frame-accurate `sfx_events` (footsteps per `walk_cycle.frames_per_step`, ±1.5 dB
+alternation; `swell` peaks at `t_sec + duration_sec` on the cut; `ambience` −24…−28 dB; `bgm.gain_db` −18…−21).
+**Art:** palette-only colour, no hex, no `#000`, `shadowOf` shadows, one key light `F.mood.key_dir_deg`, five parallax layers +
+`_lights`, ≥ 400 px margins, grounded architecture, `celShade` + `drawTaperedStroke(…, 1.6)` + one array-based `applyRimLight`,
+IK-planted feet, cloth chains, lip-sync mouths, `CAV.withBoil` on twos (`tc`) for characters/FX only, deterministic RNG.
+**Audio:** sfx assets first then procedural; `sidechaincompress` ducking ±1 dB of `audio_palette.duck_db` (15), +3 dB pause swells,
+two-pass `loudnorm` −14 LUFS / −1.5 dBTP; stems deleted after the mix.
+**Build:** per-shot clips (x264 crf 16) with frames deleted immediately; `build_state.json` hashes make reruns incremental;
+`--only s2,s3,audio` restricts a rerun; shots whose cuts moved, and a crossfade follower of any re-rendered shot, always re-render.
+Flags: `--preview --workers N --force --frames a,b,c --apply-review --ship --keep-deps --purge-recipe --stage analyze --check --auto`.
+Art API: `references/art_reference.md` · schemas: `references/storyboard_schema.json`, `references/style_schema.json`.
 
 ## Troubleshooting
-* `alignment_coverage` low → script and take differ; fix `script.txt` (spelling-only differences are fine).
+* `alignment_coverage` low → script and take differ; fix `script.txt`.
 * `scene_drawers.js does not define scene(s)` → storyboard `scene` keys must match `registerScenes` keys.
-* Ducking far from target → the voice has long breaths/music bleed; pass `--duck-db` or raise `bgm.gain_db`.
+* Ducking far from target → breaths/music bleed; pass `--duck-db` or raise `bgm.gain_db`.
 * Blank/black frames → a layer threw; read the `[scene / layer / frame]` error. Slow renders → `--workers N`, `--preview`.
-* Runtime broken or stale → delete `$SKILL_DIR/.runtime/` and run `--check` (it rebuilds). Offline → set `CAV_RUNTIME`
-  to an existing runtime; the aligner falls back to energy-only segmentation if no Whisper model is available.
+* Runtime broken/stale → delete `$SKILL_DIR/.runtime/` and run `--check`. Offline → set `CAV_RUNTIME`; the aligner falls back to
+  energy-only segmentation without a Whisper model.
+* New subagents not listed in the current session → they are registered on disk; start a new Claude Code session or use the
+  `general-purpose` fallback above (with the matching `model`).

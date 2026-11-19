@@ -11,7 +11,7 @@ build:   python3 build_video.py --script script.txt --audio voiceover.wav --styl
 analyse: ... --stage analyze          (stops after the timeline + draft storyboard)
 change:  python3 build_video.py --out final_video.mp4 --apply-review review.json
 ship:    python3 build_video.py --out final_video.mp4 --ship [--keep-deps] [--purge-recipe]
-check:   python3 build_video.py --check
+check:   python3 build_video.py --check   (also registers the cav-* subagents in ~/.claude/agents/)
 
 Rebuilds are incremental: every shot and the audio mix carry a content hash in build_state.json, so a rerun only
 re-renders what changed. --only limits a rerun to the listed shot ids and/or "audio" (and accepts the rest as-is).
@@ -85,6 +85,32 @@ def ff_info(path):
     aud = re.search(r"Audio: (\w+), (\d+) Hz", err)
     return (f"{vid.group(1)} {vid.group(2)}x{vid.group(3)} @{vid.group(4)}fps" if vid else "?") + \
            (f", {aud.group(1)} {aud.group(2)} Hz" if aud else "") + (f", {dur.group(1)}" if dur else "")
+
+
+# ----------------------------------------------------------------------------------------- subagent registration
+def sync_agents():
+    """Copy <skill>/agents/cav-*.md into ~/.claude/agents/ (or $CLAUDE_CONFIG_DIR/agents/) when missing or changed.
+    Idempotent, fast (hash compare) and silent unless something was installed/updated. Never fatal."""
+    try:
+        src = os.path.join(SKILL, "agents")
+        if not os.path.isdir(src):
+            return []
+        cfg = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+        dst = os.path.join(cfg, "agents")
+        updated = []
+        for f in sorted(glob.glob(os.path.join(src, "cav-*.md"))):
+            name = os.path.basename(f)
+            target = os.path.join(dst, name)
+            if fhash(f) != fhash(target):
+                os.makedirs(dst, exist_ok=True)
+                shutil.copyfile(f, target)
+                updated.append(name)
+        if updated:
+            log(f"registered subagents in {dst}: {', '.join(updated)} (restart/reload Claude Code if they are not yet listed)")
+        return updated
+    except Exception as e:  # read-only home, permissions, ...: the pipeline must still run
+        log(f"note: could not sync subagents ({e})")
+        return []
 
 
 # ------------------------------------------------------------------------------------------------- draft storyboard
@@ -200,6 +226,10 @@ def check():
     for k, v in rows:
         print(f"  {'✘' if 'MISSING' in str(v) else '✔'} {k:48s} {v}")
     print(f"  runtime size: {human(runtime.size_of(runtime.RT))}")
+    n = len(glob.glob(os.path.join(SKILL, "agents", "cav-*.md")))
+    if n:
+        sync_agents()
+        print(f"  ✔ {'subagents (cav-*) registered':48s} {n} in {os.path.join(os.environ.get('CLAUDE_CONFIG_DIR') or '~/.claude', 'agents')}")
     ok = not any("MISSING" in str(v) for _, v in rows)
     print("READY" if ok else "MISSING DEPENDENCIES")
     return ok
@@ -237,6 +267,8 @@ def main():
     prev_in = state.get("inputs", {})
     sb_path = os.path.abspath(a.storyboard) if a.storyboard else prev_in.get("storyboard") or os.path.join(work, "storyboard.json")
     drawers = os.path.abspath(a.drawers) if a.drawers else prev_in.get("drawers") or os.path.join(work, "scene_drawers.js")
+
+    sync_agents()                  # keep ~/.claude/agents/cav-*.md current (silent unless it changed something)
 
     # actions that need no dependencies
     if a.ship:

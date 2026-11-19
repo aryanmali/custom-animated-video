@@ -29,7 +29,7 @@ the style bible you pass at run time.
 
 ## Install
 
-Copy this folder anywhere (as a Claude Code skill: `~/.claude/skills/custom-animated-video/`). That's it.
+Copy this folder anywhere (as a Claude Code skill: `~/.claude/skills/custom-animated-video/`). That's it. The `cav-*` subagents register themselves into `~/.claude/agents/` automatically.
 The only prerequisite is **python3 ≥ 3.9** and internet on the first run. Everything else installs itself into a
 private `.runtime/` folder inside the skill: a venv with numpy, scipy, faster-whisper and Playwright (which bundles its
 own Node.js), the Whisper model, Chromium if you have no Chrome/Edge, and an ffmpeg if yours is missing or incomplete.
@@ -40,7 +40,64 @@ No global installs, nothing written to `~/.cache`, and no other Python/Node envi
 python3 scripts/build_video.py --check          # bootstrap (1–3 min once) and verify
 ```
 
-## Use
+## Multi-agent architecture
+
+As a Claude Code skill, `SKILL.md` is a lean **orchestrator**. Each pipeline stage runs in its own single-shot subagent
+on the model and effort that fits it, so cheap stages stay cheap and the art gets the strongest model.
+
+| stage | subagent | model · effort | what it does |
+|---|---|---|---|
+| 1 ingest | `cav-ingest` | haiku · low | verifies the runtime, runs `--stage analyze`, checks `alignment_coverage >= 0.6`, writes a compact `WORK/director_brief.json` (so per-frame arrays never reach later contexts) |
+| 2 direct | `cav-director` | sonnet · medium | writes `storyboard.json` under the 7 director rules (tiling, pause-midpoint cuts, camera variety, frame-accurate SFX); also does shot-only updates |
+| 3 draw | `cav-artist` | opus · high | writes `scene_drawers.js` under the 6 art rules and verifies with a `--frames` preview; also does targeted fixes |
+| 3 draw (budget) | `cav-artist-fast` | sonnet · high | same contract, used only when you ask for fast/low-cost mode |
+| 4 build | `cav-builder` | haiku · low | full builds, `--only` rebuilds, `--apply-review`, `--ship`; checks ducking (±1 dB) and −14 LUFS |
+| 5 QA | `cav-qa-critic` | sonnet · medium | inspects `WORK/qa/` against the 6-point checklist, returns `STATUS: PASS/FAIL` with per-shot defect tickets |
+
+Flow: ingest → direct → draw → build → QA (up to 2 automatic fix loops) → **review gate in your session** (ship it / change it)
+→ ship. Subagents are stateless: a fresh one is spawned per task, because prompt caches expire long before a human answers a
+review question. The review gate (`AskUserQuestion`) always runs in the main session.
+
+**Zero-setup registration.** Claude Code finds custom subagents in `~/.claude/agents/`, not inside a skill folder. So
+`scripts/build_video.py` (on every start, and in `--check`) copies `agents/cav-*.md` there whenever a file is missing or its
+content hash differs. It is fast, idempotent, honours `CLAUDE_CONFIG_DIR`, never fails the build, and prints a line only when it
+changed something. `SKILL.md` Phase 0 also runs a portable one-line `cmp`/`cp` loop (macOS + Linux, honours `CLAUDE_CONFIG_DIR`) so the agents exist on the very first turn. If Claude Code does
+not list them yet in an already-running session, start a new session; the skill falls back to a `general-purpose` agent in
+the meantime, keeping the same model routing (`model=` haiku/sonnet/opus).
+
+## Using it from Claude Code
+
+Put your three inputs somewhere (a script, a voiceover, a style bible) and just ask:
+
+```text
+# carefree one-liner
+Animate ~/shorts/dusk/script.txt with ~/shorts/dusk/voice.wav in the style of ~/styles/ink_bible.json
+
+# vertical 9:16 Short with karaoke subtitles
+Make a 9:16 YouTube Short from script.txt + voice.wav using style_bible.json, subtitles on, output to ./short/final_video.mp4
+
+# custom music
+Render the dusk story with my style bible and use ~/music/sitar.mp3 as the BGM
+
+# fast / budget mode (cav-artist-fast instead of cav-artist)
+Fast and cheap: animate script.txt + voice.wav in style_bible.json, a quick draft is fine
+
+# iterative review: answer the Ship it / Change it questions, or just say it
+Change it: the face in the second shot looks too long, and make the music quieter
+```
+
+You will be asked "Ship it or change it?" after QA passes. Parametric changes (framing, subtitles, ±3 dB sound) are applied and
+only the affected shots/audio are rebuilt; art or cut notes go to the director/artist for just those shots. *Ship it* keeps only
+the video and removes the private runtime.
+
+**Standalone CLI (no Claude needed for the mechanical stages):** everything below still works as before, and `--auto` renders
+the draft storyboard with the generic drawers.
+
+```bash
+python3 scripts/build_video.py --script script.txt --audio voice.wav --style style_bible.json --out out/final_video.mp4 --auto
+```
+
+## Use (CLI reference)
 
 ```bash
 # 1) analyse: normalized style, aligned timeline, draft storyboard
@@ -136,7 +193,8 @@ names listed in `examples/test_project/README.md`. To try the pipeline with any 
 ```
 custom-animated-video/
 ├── SKILL.md  README.md  requirements.txt
-├── references/  style_schema.json  storyboard_schema.json
+├── agents/      cav-ingest  cav-director  cav-artist  cav-artist-fast  cav-builder  cav-qa-critic  (.md subagents)
+├── references/  style_schema.json  storyboard_schema.json  art_reference.md
 ├── scripts/     normalize_style.py  analyze_audio.py  render_frames.js  canvas_runtime.js
 │                sfx_synth.py  mix_audio.py  build_video.py  review.py  runtime.py
 ├── examples/    generic_drawers.js  test_project/{README.md, script.txt, storyboard.json, scene_drawers.js}
