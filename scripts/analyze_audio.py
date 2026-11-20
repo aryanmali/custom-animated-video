@@ -99,7 +99,7 @@ def split_sentences(text):
         line = line.strip()
         if not line:
             continue
-        parts += [p.strip() for p in re.split(r"(?<=[.!?…])\s+(?=[\"'“‘(\[]?[A-Z0-9])", line) if p.strip()]
+        parts += [p.strip() for p in re.split(r"(?<=[.!?…।॥])\s+(?=[\"'“‘(\[]?[A-Z0-9ऀ-ॿ])", line) if p.strip()]
     return parts
 
 
@@ -109,16 +109,49 @@ def split_phrases(sentence):
 
 
 def norm_tok(w):
-    w = w.lower().replace("’", "'")
-    w = re.sub(r"[^a-z0-9']", "", w)
+    import unicodedata
+    w = unicodedata.normalize("NFC", w).lower().replace("’", "'")
+    w = w.replace("\u093c", "").replace("\u0901", "\u0902")  # Devanagari: drop nukta, chandrabindu->anusvara
+    w = re.sub(r"[^a-z0-9'\u0900-\u0963\u0966-\u097f]", "", w)
     return w.strip("'")
 
 
+DEVANAGARI = re.compile(r"[\u0900-\u097f]")
+
+
+def detect_language(text):
+    """'hi' when the script is mostly Devanagari, else 'en' (None when there is no script)."""
+    if not text:
+        return None
+    letters = [c for c in text if c.isalpha()]
+    dev = sum(1 for c in letters if DEVANAGARI.match(c))
+    return "hi" if letters and dev / len(letters) > 0.3 else "en"
+
+
+def resolve_model(model, lang):
+    """English-only (*.en) Whisper models cannot hear Hindi: swap to the multilingual twin."""
+    if lang and lang != "en" and model.endswith(".en"):
+        base = model[:-3]
+        return "small" if base in ("tiny", "base") else base
+    return model
+
+
+# rough Devanagari -> Latin map, only used to pick lip-sync visemes
+_DEV_LAT = {**{c: "a" for c in "अआऐऔािैौ"}, **{c: "i" for c in "इईएिीे"}, **{c: "u" for c in "उऊओुूो"},
+            **{c: "m" for c in "मबभपफ"}, **{c: "v" for c in "वफ"}, "ं": "m", "ँ": "m"}
+
+
+def latinize(w):
+    if not DEVANAGARI.search(w):
+        return w
+    return "".join(_DEV_LAT.get(c, "a" if DEVANAGARI.match(c) and c not in "्ःऽ" else "") for c in w)
+
+
 # --------------------------------------------------------------------------------------------------------- ASR paths
-def asr_faster_whisper(path, model, prompt):
+def asr_faster_whisper(path, model, prompt, language=None):
     from faster_whisper import WhisperModel
     m = WhisperModel(model, device="cpu", compute_type="int8")
-    lang = "en" if model.endswith(".en") else None
+    lang = "en" if model.endswith(".en") else language
     segs, info = m.transcribe(path, word_timestamps=True, language=lang, initial_prompt=(prompt or None) and prompt[:600],
                               vad_filter=False, beam_size=5, condition_on_previous_text=False)
     words = []
@@ -129,10 +162,10 @@ def asr_faster_whisper(path, model, prompt):
     return words
 
 
-def asr_openai_whisper(path, model, prompt):
+def asr_openai_whisper(path, model, prompt, language=None):
     import whisper
     m = whisper.load_model(model.replace(".en", "") if model.endswith(".en") and model.startswith("large") else model)
-    r = m.transcribe(path, word_timestamps=True, initial_prompt=prompt[:600] if prompt else None)
+    r = m.transcribe(path, word_timestamps=True, language=language, initial_prompt=prompt[:600] if prompt else None)
     return [{"word": w["word"].strip(), "start": float(w["start"]), "end": float(w["end"]),
              "prob": round(float(w.get("probability", 1.0)), 3)} for s in r["segments"] for w in s.get("words", [])]
 
@@ -228,7 +261,7 @@ def mouth_tracks(env, words, fps):
         e = float(env[i])
         if w is None or e < 0.1:
             continue
-        letters = re.sub(r"[^a-z]", "", w["text"].lower()) or "a"
+        letters = re.sub(r"[^a-z]", "", latinize(w["text"]).lower()) or "a"
         frac = min(0.999, max(0.0, (t - w["start"]) / max(1e-3, w["end"] - w["start"])))
         ch = letters[int(frac * len(letters))]
         if ch in "mbp":
@@ -258,6 +291,8 @@ def main():
     ap.add_argument("-o", "--out", default="audio_timeline.json")
     ap.add_argument("--fps", type=int, default=24)
     ap.add_argument("--model", default=os.environ.get("CAV_WHISPER_MODEL", "base.en"))
+    ap.add_argument("--language", default=os.environ.get("CAV_LANGUAGE", "auto"),
+                    help="spoken language for Whisper: auto (from the script's script/alphabet), en, hi, ...")
     ap.add_argument("--engine", default="auto", choices=["auto", "faster-whisper", "whisper", "energy"])
     ap.add_argument("--min-pause", type=float, default=0.55)
     a = ap.parse_args()
@@ -265,6 +300,11 @@ def main():
     x = load_audio(a.audio)
     duration = len(x) / SR
     script = read_script(a.script)
+    lang = detect_language(script) if a.language == "auto" else a.language
+    model = resolve_model(a.model, lang)
+    if model != a.model:
+        print(f"[analyze_audio] script language '{lang}': using multilingual Whisper '{model}' instead of '{a.model}'",
+              file=sys.stderr)
     silences, speech, levels = find_silences(x, a.min_pause)
     speech_span = (speech[0][0], speech[-1][1]) if speech else (0.0, duration)
 
@@ -273,7 +313,7 @@ def main():
              "energy": []}[a.engine]
     for eng in order:
         try:
-            asr = (asr_faster_whisper if eng == "faster-whisper" else asr_openai_whisper)(a.audio, a.model, script)
+            asr = (asr_faster_whisper if eng == "faster-whisper" else asr_openai_whisper)(a.audio, model, script, lang)
             engine = eng
             if asr:
                 break
@@ -347,7 +387,7 @@ def main():
     out = {
         "version": "1.0", "audio": os.path.abspath(a.audio), "fps": a.fps,
         "duration_sec": round(duration, 3), "total_frames": total_frames,
-        "engine": engine, "model": a.model if engine != "energy" else None,
+        "engine": engine, "model": model if engine != "energy" else None, "language": lang,
         "alignment_coverage": round(coverage, 3), "levels": levels,
         "speech_span": [round(speech_span[0], 3), round(speech_span[1], 3)],
         "segments": segments, "words": words, "pauses": pauses, "edges": edges,

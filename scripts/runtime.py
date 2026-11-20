@@ -132,7 +132,8 @@ def setup_env():
     """Export the env every sub-step needs (private caches, ffmpeg on PATH, bundled Node + playwright-core)."""
     st = _stamp()
     env = {"HF_HOME": os.path.join(RT, "hf"), "PLAYWRIGHT_BROWSERS_PATH": os.path.join(RT, "browsers"),
-           "PYTHONDONTWRITEBYTECODE": "1", "CAV_PYTHON": sys.executable, "HF_HUB_DISABLE_TELEMETRY": "1"}
+           "PYTHONDONTWRITEBYTECODE": "1", "CAV_PYTHON": sys.executable, "HF_HUB_DISABLE_TELEMETRY": "1",
+           "HF_HUB_DISABLE_XET": "1"}  # the xet transport can stall on large Whisper weights
     os.environ.update(env)
     sys.dont_write_bytecode = True
     ff = _resolve_ffmpeg(st)

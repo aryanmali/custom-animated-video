@@ -248,7 +248,9 @@ def main():
     ap.add_argument("--workers", type=int); ap.add_argument("--preview", action="store_true", help="half resolution, fast")
     ap.add_argument("--auto", action="store_true", help="render the draft storyboard with the generic drawers")
     ap.add_argument("--force", action="store_true", help="redo analysis and every shot")
-    ap.add_argument("--whisper-model", default=os.environ.get("CAV_WHISPER_MODEL", "base.en"))
+    ap.add_argument("--whisper-model", default=os.environ.get("CAV_WHISPER_MODEL", "base.en"),
+                    help="*.en models are swapped for their multilingual twin when the script is not English")
+    ap.add_argument("--language", default=os.environ.get("CAV_LANGUAGE", "auto"), help="spoken language: auto, en, hi, ...")
     ap.add_argument("--keep-frames", action="store_true", help="debug: keep PNG frames after encoding")
     ap.add_argument("--no-review", action="store_true", help="skip the interactive ship/change prompt")
     ap.add_argument("--apply-review", metavar="REVIEW_JSON", help="apply ship/change answers, then rebuild only what they touch")
@@ -304,9 +306,10 @@ def main():
     sh = fhash(a.style)
     if a.force or state.get("style_src") != sh or not os.path.exists(style_n):
         run([PY, S("normalize_style.py"), a.style, "-o", style_n])
-    th = h(fhash(a.audio), fhash(a.script), a.whisper_model)
+    th = h(fhash(a.audio), fhash(a.script), a.whisper_model, a.language, "lang-v2")
     if a.force or state.get("timeline_src") != th or not os.path.exists(tl_path):
-        run([PY, S("analyze_audio.py"), "--audio", a.audio, "--script", a.script, "-o", tl_path, "--model", a.whisper_model])
+        run([PY, S("analyze_audio.py"), "--audio", a.audio, "--script", a.script, "-o", tl_path, "--model", a.whisper_model,
+             "--language", a.language])
     style = json.load(open(style_n))
     tl = json.load(open(tl_path))
     state.update({"style_src": sh, "timeline_src": th})

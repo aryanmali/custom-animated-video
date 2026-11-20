@@ -1,5 +1,6 @@
 ---
 name: custom-animated-video
+version: 1.1.0
 description: Turn a script + voiceover + ANY style_bible.json into a finished, frame-by-frame animated MP4 with lip sync, tapered-ink cel art, rim light, cloth physics, parallax camera moves, styled subtitles, style-matched foley/ambience and an auto-ducked, -14 LUFS mix. Use when the user asks to animate a voiceover/narration, make an animated short, explainer or YouTube Short from a script and audio, render a story "in my style", or build a video from a style bible. Renders locally (Playwright + HTML5 canvas + FFmpeg + numpy/scipy, faster-whisper for alignment); no cloud video APIs. Orchestrates specialised subagents (cav-*), each on its own model and effort.
 allowed-tools: Agent, Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion
 ---
@@ -149,6 +150,10 @@ Art API: `references/art_reference.md` · schemas: `references/storyboard_schema
 
 ## Troubleshooting
 * `alignment_coverage` low → script and take differ; fix `script.txt`.
+* **Hindi / Devanagari (and other non-English) scripts** are supported: the script's language is auto-detected and an
+  English-only `*.en` Whisper model is swapped for its multilingual twin (`base.en` → `small`); sentences also split on
+  `।`/`॥`. Force with `--language hi` / `CAV_LANGUAGE`; if Hindi coverage stays < 0.6, pass `--whisper-model medium`.
+  Subtitles fall back to Devanagari fonts automatically.
 * `scene_drawers.js does not define scene(s)` → storyboard `scene` keys must match `registerScenes` keys.
 * Ducking far from target → breaths/music bleed; pass `--duck-db` or raise `bgm.gain_db`.
 * Blank/black frames → a layer threw; read the `[scene / layer / frame]` error. Slow renders → `--workers N`, `--preview`.

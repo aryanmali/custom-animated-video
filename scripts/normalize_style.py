@@ -62,7 +62,7 @@ DEFAULT_MOTION = {
 }
 DEFAULT_PROPORTIONS = {"default_figure": {"heads_tall": 7.5, "shoulder_width_heads": 2.0, "waist_heads": 1.15}}
 DEFAULT_SUBTITLES = {
-    "font_family": "Georgia, 'Palatino Linotype', 'Book Antiqua', serif", "font_weight": 700,
+    "font_family": "Georgia, 'Palatino Linotype', 'Book Antiqua', 'Noto Serif Devanagari', 'Kohinoor Devanagari', 'Devanagari Sangam MN', 'Nirmala UI', 'Mangal', serif", "font_weight": 700,
     "size_px": 54, "fill": None, "outline": None, "highlight": None, "outline_px": 7,
     "max_words_per_line": 7, "position": "lower_third", "uppercase": False,
 }

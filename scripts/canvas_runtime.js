@@ -745,7 +745,9 @@
     const W = F.W, H = F.H, u = F.u;
     const size = (st.size_px || 54) * u * (F.aspect === '9:16' ? 1.1 : 1);
     ctx.save();
-    ctx.font = `${st.font_weight || 700} ${size}px ${st.font_family}`;
+    const fam = /Devanagari/.test(st.font_family || '') ? st.font_family
+      : `${(st.font_family || 'serif').replace(/,?\s*(serif|sans-serif)\s*$/, '')}, 'Noto Serif Devanagari', 'Kohinoor Devanagari', 'Devanagari Sangam MN', 'Nirmala UI', serif`;
+    ctx.font = `${st.font_weight || 700} ${size}px ${fam}`;
     ctx.textBaseline = 'alphabetic'; ctx.lineJoin = 'round'; ctx.miterLimit = 2;
     const words = cap.words.map(w => (st.uppercase ? w.text.toUpperCase() : w.text));
     const space = ctx.measureText(' ').width + (st.outline_px || 7) * u * 0.9, maxW = W * (F.aspect === '9:16' ? 0.84 : 0.72);

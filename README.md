@@ -134,6 +134,7 @@ python3 scripts/build_video.py --out myfilm/final_video.mp4 --ship
 | `--ship` (`--keep-deps`, `--purge-recipe`) | – | keep only the video; delete intermediates (+ runtime unless `--keep-deps`) |
 | `--preview` / `--workers` / `--force` | off / cores÷2 / off | half resolution / parallel pages / redo everything |
 | `--whisper-model` / `--no-review` / `--clean` / `--check` | `base.en` | |
+| `--language` | `auto` | spoken language (auto-detected from the script: Devanagari → `hi`); non-English swaps `*.en` models for multilingual ones |
 
 **Disk hygiene is automatic.** Frames are deleted as soon as each shot's clip is encoded, and stems as soon as the
 mix is mastered. Between builds a project holds only the final video, a few MB of clips, the master audio, QA frames
