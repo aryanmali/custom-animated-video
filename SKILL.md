@@ -1,6 +1,6 @@
 ---
 name: custom-animated-video
-version: 1.2.0
+version: 1.2.1
 description: Turn a script + voiceover + ANY style_bible.json into a finished, frame-by-frame animated MP4 with lip sync, tapered-ink cel art, rim light, cloth physics, parallax camera moves, styled subtitles, style-matched foley/ambience and an auto-ducked, -14 LUFS mix. Use when the user asks to animate a voiceover/narration, make an animated short, explainer or YouTube Short from a script and audio, render a story "in my style", or build a video from a style bible. Renders locally (Playwright + HTML5 canvas + FFmpeg + numpy/scipy, faster-whisper for alignment); no cloud video APIs. Orchestrates specialised subagents (cav-*): Opus makes the creative decisions (storyboard, visual specs, QA), Sonnet/Haiku execute.
 allowed-tools: Agent, Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion
 ---
@@ -16,7 +16,7 @@ user's `style_bible.json`.
 | `--script` | `script.txt` / `script.md` (the words actually spoken) |
 | `--audio` | `voiceover.wav` / `.mp3` |
 | `--style` | `style_bible.json` (any shape; normalized automatically) |
-| `--bgm` | optional music file (else asset library, else procedural modal drone) |
+| `--bgm` | optional music file (else asset library, else procedural drone + Bhairavi motif with reverb) |
 | `--aspect` | `16:9` (1920×1080, default) or `9:16` (1080×1920) |
 | `--subtitles` | `true` / `false` |
 | `--out` | output `.mp4` (its folder is `WORK` unless `--workdir`) |

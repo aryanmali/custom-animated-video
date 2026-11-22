@@ -143,7 +143,7 @@ python3 scripts/build_video.py --out myfilm/final_video.mp4 --ship
 |---|---|---|
 | `--script` / `--audio` / `--style` | required on first build | `.txt/.md`, `.wav/.mp3`, any style bible (remembered afterwards) |
 | `--storyboard` / `--drawers` | `<workdir>/storyboard.json`, `<workdir>/drawers/` (else `scene_drawers.js`) | drawers dir = `_common.js` + one `<scene>.js` per scene; each shot is cached against only its own scene file |
-| `--bgm` | auto | file > `storyboard.bgm.path` > `assets/bgm/*` > procedural modal drone |
+| `--bgm` | auto | file > `storyboard.bgm.path` > `assets/bgm/*` > procedural drone + Bhairavi motif |
 | `--aspect` / `--subtitles` | `16:9` / storyboard | `9:16` renders 1080×1920; karaoke captions in the style's colours |
 | `--out` / `--workdir` | `final_video.mp4` / its folder | |
 | `--only` | – | `s2,s3,audio`: rebuild just these (others accepted as-is) |
@@ -176,7 +176,8 @@ and small JSON files. After shipping, only the video remains.
     `bgm_<mood>.mp3`.
   * Otherwise procedural, warm and non-harsh: beds (river, wind, rain, temple_hum, city_hum, night), foley
     (footsteps on stone, wood, grass or gravel, cloth whoosh, temple bell, chime, singing bowl, low swell) and a
-    tanpura-style modal drone with a pad.
+    tanpura-style modal drone with a pad, a slow Bhairavi melodic motif (soft vibrato notes, long rests so narration
+    stays clear) and a light stereo reverb.
   * Events are placed to the millisecond. The BGM ducks under the voice via `sidechaincompress`, calibrated in a
     closed loop to the requested depth (15 dB by default), and swells +3 dB in pauses. Two-pass `loudnorm` brings the
     mix to −14 LUFS.

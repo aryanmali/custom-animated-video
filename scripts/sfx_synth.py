@@ -350,9 +350,40 @@ def bgm(dur, root_hz=110.0, mode="warm", seed=0, pauses=()):
             pad += np.sin(2 * np.pi * f * (1 + det) * t + j) * (0.32 if s in (0, 7, 12) else 0.16 * lfo)
     pad = filt(pad, "low", 1800, 2) * smooth_noise(n, r, 0.12, 0.65, 1.0)
     sub = np.sin(2 * np.pi * root_hz / 2 * t) * 0.18
-    x = out + pad * 0.35 + sub
-    x = warm(norm(x, -3), 1.15)
-    st = np.stack([x, np.roll(x, int(0.012 * SR)) * 0.96], axis=1)
+    # slow evolving motif in Bhairavi (Sa re ga ma Pa dha ni), soft sine/triangle notes with long envelopes
+    phrases = [[7, 5, 3, 1, 0], [0, 3, 5, 7], [8, 7, 5, 3, 5], [3, 1, 0, 1, 3], [10, 8, 7, 5, 7], [5, 3, 1, 0]]
+    mel = np.zeros(n)
+    tt0 = 2.5 + r.uniform(0, 1.0); pi = 0
+    while tt0 < dur - 1.0:
+        ph = phrases[(pi * 5 + int(r.integers(0, 2))) % len(phrases)]
+        tn = tt0
+        for s in ph:
+            i0 = int(tn * SR)
+            if i0 >= n:
+                break
+            f = root_hz * 2 * 2 ** (s / 12)
+            L = min(n - i0, int(SR * 3.2)); u = np.arange(L) / SR
+            env = np.minimum(1, u / 0.35) * np.exp(-u / 1.1)
+            tri = signal.sawtooth(2 * np.pi * f * u, 0.5)
+            vib = np.sin(2 * np.pi * f * u + 0.24 * np.sin(2 * np.pi * 4.5 * u) * np.minimum(1, u / 1.0))
+            mel[i0:i0 + L] += (0.7 * vib + 0.12 * tri) * env * r.uniform(0.75, 1.0)
+            tn += r.uniform(1.5, 2.2)
+        tt0 = tn + r.uniform(4.0, 7.5)  # long breathing rests so narration stays clear
+        pi += 1
+    mel = filt(mel, "low", 1600, 2)
+    mel *= smooth_noise(n, r, 0.05, 0.5, 1.0)
+    dry = out + pad * 0.35 + sub + mel * 0.22
+    # light reverb: decaying noise impulse response (deterministic), ~2.2 s
+    L = int(2.2 * SR); ir_t = np.arange(L) / SR
+    ir = r.standard_normal(L) * np.exp(-ir_t / 0.55)
+    ir = filt(ir, "low", 4500, 2); ir[0] = 0
+    ir /= np.sqrt(np.sum(ir ** 2)) + 1e-9
+    ir2 = np.roll(ir, 37)
+    wet = signal.fftconvolve(dry, ir)[:n]
+    wet2 = signal.fftconvolve(dry, ir2)[:n]
+    xl = dry * 0.78 + wet * 0.35
+    xr = np.roll(dry, int(0.012 * SR)) * 0.75 + wet2 * 0.35
+    st = np.stack([warm(norm(xl, -3), 1.1), warm(norm(xr, -3), 1.1)], axis=1)
     return fade(norm(st, -3), 1.2, 1.5)
 
 
@@ -416,7 +447,7 @@ def batch(a):
     else:
         root = float(bspec.get("root_hz") or ap.get("drone_root_hz", 110))
         x = bgm(dur, root, bspec.get("mode_override") or mood_mode(mood0, style.get("lighting_moods", {}).get(mood0, {})), seed=1)
-        src = f"procedural modal drone (root {root:.0f} Hz, {mood_mode(mood0, {})})"
+        src = f"procedural modal drone + Bhairavi motif, reverb (root {root:.0f} Hz, {mood_mode(mood0, {})})"
     write(os.path.join(a.outdir, "bgm.wav"), x)
     manifest["bgm"] = {"file": "bgm.wav", "gain_db": float(bspec.get("gain_db", ap.get("bgm_gain_db", -20))), "source": src}
 
