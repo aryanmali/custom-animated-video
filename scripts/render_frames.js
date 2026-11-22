@@ -2,12 +2,13 @@
 /* custom-animated-video — style-agnostic Playwright + HTML5 canvas frame renderer.
  *
  * usage:
- *   node render_frames.js --style style.normalized.json --storyboard storyboard.json --drawers scene_drawers.js
+ *   node render_frames.js --style style.normalized.json --storyboard storyboard.json --drawers drawers/|scene_drawers.js
  *        [--timeline audio_timeline.json] [--out frames/] [--aspect 16:9|9:16] [--subtitles true|false]
  *        [--frames 0,48,120 | --range 0-167] [--every N] [--scale 0.5] [--workers 4] [--format png|jpeg]
  *
  * The page loads canvas_runtime.js (shader primitives, camera rig, post, subtitles) and then the project's
- * scene_drawers.js, which registers scenes with CAV.registerScenes({...}). Every frame is a pure function of its
+ * drawers (a single scene_drawers.js, or a drawers/ directory: _common*.js first, then one <scene>.js per scene, each
+ * loaded as its own script so errors name the file), which register scenes with CAV.registerScenes({...}). Every frame is a pure function of its
  * index, so frames render in parallel across --workers pages and partial re-renders are safe.
  */
 'use strict';
@@ -84,7 +85,13 @@ async function main() {
   const TL = tlPath && fs.existsSync(tlPath) ? readJSON(tlPath, 'timeline') : null;
   if (!TL) console.warn('[render_frames] no audio_timeline.json: lip sync and subtitles disabled');
   const drawers = a.drawers || (SB.drawers && path.resolve(sbDir, SB.drawers));
-  if (!drawers || !fs.existsSync(drawers)) die('--drawers scene_drawers.js not found: ' + drawers);
+  if (!drawers || !fs.existsSync(drawers)) die('--drawers (drawers/ dir or scene_drawers.js) not found: ' + drawers);
+  let drawerFiles = [drawers];
+  if (fs.statSync(drawers).isDirectory()) {
+    const js = fs.readdirSync(drawers).filter(f => f.endsWith('.js')).sort();
+    drawerFiles = js.filter(f => f.startsWith('_common')).concat(js.filter(f => !f.startsWith('_common'))).map(f => path.join(drawers, f));
+    if (!drawerFiles.length) die('drawers directory has no .js files: ' + drawers);
+  }
 
   const aspect = a.aspect || SB.aspect || '16:9';
   const [W, H] = aspect === '9:16' ? [1080, 1920] : aspect === '1:1' ? [1080, 1080] : [1920, 1080];
@@ -109,7 +116,7 @@ async function main() {
 
   const workers = Math.max(1, Math.min(parseInt(a.workers || String(Math.max(1, Math.min(6, Math.floor(os.cpus().length / 2)))), 10), frames.length));
   const runtime = fs.readFileSync(path.join(__dirname, 'canvas_runtime.js'), 'utf8');
-  const drawerSrc = fs.readFileSync(drawers, 'utf8');
+  const drawerSrcs = drawerFiles.map(f => ({ name: path.basename(f), src: fs.readFileSync(f, 'utf8') }));
   const { chromium } = loadPlaywright();
   const browser = await launch(chromium);
   const t0 = Date.now();
@@ -127,9 +134,11 @@ async function main() {
     page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') console.log(`[page ${w}] ${m.text()}`); });
     await page.setContent('<!doctype html><html><body style="margin:0;background:#000"><canvas id="c"></canvas></body></html>');
     await page.addScriptTag({ content: runtime });
-    try { await page.addScriptTag({ content: drawerSrc + '\n//# sourceURL=' + path.basename(drawers) }); }
-    catch (e) { die('scene_drawers.js failed to load: ' + e.message); }
-    if (errors.length) die(errors.join('\n'));
+    for (const d of drawerSrcs) {
+      try { await page.addScriptTag({ content: d.src + '\n//# sourceURL=' + d.name }); }
+      catch (e) { die(`drawer ${d.name} failed to load: ` + e.message); }
+      if (errors.length) die(`drawer ${d.name} failed to load:\n` + errors.join('\n'));
+    }
     const info = await page.evaluate(cfg => window.CAV.init(cfg), { style, storyboard: SB, timeline: TL, W, H, scale, aspect, subtitles })
       .catch(e => die('init failed: ' + e.message));
     if (w === 0) console.log(`[render_frames] scenes: ${info.scenes.join(', ')}`);

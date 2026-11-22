@@ -15,8 +15,8 @@ the style bible you pass at run time.
  voiceover ┘    │ whisper+align│   │ segments, words,   │   │ (Claude directs:     │ │ render_frames.js │
                 │ pauses, 24fps│   │ dramatic_pause,    │   │ shots, moods, camera,│▶│ Playwright+canvas│──▶ frames/*.png
                 │ RMS, mouths  │   │ envelope, mouth    │   │ sfx_events)          │ │ canvas_runtime.js│      │
-                └──────────────┘   └────────────────────┘   ├──────────────────────┤ │ + scene_drawers  │      │
-                                                            │ scene_drawers.js     │▶└──────────────────┘      │
+                └──────────────┘   └────────────────────┘   ├──────────────────────┤ │ + drawers/*.js   │      │
+                                                            │ drawers/<scene>.js   │▶└──────────────────┘      │
                                                             │ (Claude draws)       │                           │
                                                             └──────────┬───────────┘                           │
                 ┌──────────────┐   ┌────────────────────┐              │                                       ▼
@@ -42,20 +42,36 @@ python3 scripts/build_video.py --check          # bootstrap (1–3 min once) and
 
 ## Multi-agent architecture
 
-As a Claude Code skill, `SKILL.md` is a lean **orchestrator**. Each pipeline stage runs in its own single-shot subagent
-on the model and effort that fits it, so cheap stages stay cheap and the art gets the strongest model.
+As a Claude Code skill, `SKILL.md` is a lean **orchestrator**. Each pipeline stage runs in its own single-shot subagent.
+The rule is **Opus decides, Sonnet/Haiku execute**:
+- every creative decision is made once, by Opus, and written down precisely: the storyboard, a visual spec per scene, and the
+  QA judgement;
+- the expensive part, writing and fixing hundreds of lines of canvas code, runs on Sonnet against those specs.
 
 | stage | subagent | model · effort | what it does |
 |---|---|---|---|
 | 1 ingest | `cav-ingest` | haiku · low | verifies the runtime, runs `--stage analyze`, checks `alignment_coverage >= 0.6`, writes a compact `WORK/director_brief.json` (so per-frame arrays never reach later contexts) |
-| 2 direct | `cav-director` | sonnet · medium | writes `storyboard.json` under the 7 director rules (tiling, pause-midpoint cuts, camera variety, frame-accurate SFX); also does shot-only updates |
-| 3 draw | `cav-artist` | opus · high | writes `scene_drawers.js` under the 6 art rules and verifies with a `--frames` preview; also does targeted fixes |
-| 3 draw (budget) | `cav-artist-fast` | sonnet · high | same contract, used only when you ask for fast/low-cost mode |
-| 4 build | `cav-builder` | haiku · low | full builds, `--only` rebuilds, `--apply-review`, `--ship`; checks ducking (±1 dB) and −14 LUFS |
-| 5 QA | `cav-qa-critic` | sonnet · medium | inspects `WORK/qa/` against the 6-point checklist, returns `STATUS: PASS/FAIL` with per-shot defect tickets |
+| 2 creative | `cav-storyboarder` | opus · high | all creative calls: shots and pause-midpoint cuts (1.5–4 s), scene keys, camera, moods, transitions, params, `sound_intent` → `storyboard.json`; an executable spec per scene → `visual_specs/*.md` |
+| 3 timing & sound | `cav-timeline` | sonnet · medium | frame-accurate tiling, `sound_intent` → `sfx_events`/ambience/bgm; applies storyboard tickets; never changes creative fields |
+| 4 draw | `cav-artist` | sonnet · medium | implements the specs literally as `drawers/_common.js` + one `drawers/<scene>.js` per scene; `--frames` preview; applies drawer tickets |
+| 5 build | `cav-builder` | haiku · low | full/incremental builds, `--apply-review`, `--ship`; checks ducking (±1 dB) and −14 LUFS |
+| 6 QA | `cav-qa-critic` | opus · medium | judges `WORK/qa/` frames against the 6-point checklist + each spec's "Must be visible"; writes artist-ready `WORK/qa/tickets_r<N>.json`; final round writes `WORK/known_flaws.md` |
 
-Flow: ingest → direct → draw → build → QA (up to 2 automatic fix loops) → **review gate in your session** (ship it / change it)
-→ ship. Subagents are stateless: a fresh one is spawned per task, because prompt caches expire long before a human answers a
+Flow:
+1. ingest → storyboarder → timeline → artist(s) → build.
+2. QA: at most **2 fix rounds**. QA r1 → fix → QA r2 → fix → QA r3, verify only. Leftovers go to `known_flaws.md`.
+3. **Review gate in your session** (ship it / change it) → ship.
+
+QA ticket files are passed **unchanged** to the artist (drawer tickets) and the timeline (storyboard tickets). The orchestrator
+never re-writes them.
+
+**Why fixes are cheap:**
+- One scene = one spec file = one drawer file.
+- Each shot's cache hash covers only `_common.js` + its own scene file (plus its storyboard entry), so fixing one scene
+  re-renders only the shots that use it.
+- A fix-mode artist reads only the ticket, that scene file and its spec.
+
+Subagents are stateless: a fresh one is spawned per task, because prompt caches expire long before a human answers a
 review question. The review gate (`AskUserQuestion`) always runs in the main session.
 
 **Zero-setup registration.** Claude Code finds custom subagents in `~/.claude/agents/`, not inside a skill folder. So
@@ -63,7 +79,8 @@ review question. The review gate (`AskUserQuestion`) always runs in the main ses
 content hash differs. It is fast, idempotent, honours `CLAUDE_CONFIG_DIR`, never fails the build, and prints a line only when it
 changed something. `SKILL.md` Phase 0 also runs a portable one-line `cmp`/`cp` loop (macOS + Linux, honours `CLAUDE_CONFIG_DIR`) so the agents exist on the very first turn. If Claude Code does
 not list them yet in an already-running session, start a new session; the skill falls back to a `general-purpose` agent in
-the meantime, keeping the same model routing (`model=` haiku/sonnet/opus).
+the meantime, keeping the same model routing (`model=` haiku/sonnet/opus). Retired v1 agents (`cav-director`,
+`cav-artist-fast`) are removed from `~/.claude/agents/` automatically.
 
 ## Using it from Claude Code
 
@@ -79,7 +96,7 @@ Make a 9:16 YouTube Short from script.txt + voice.wav using style_bible.json, su
 # custom music
 Render the dusk story with my style bible and use ~/music/sitar.mp3 as the BGM
 
-# fast / budget mode (cav-artist-fast instead of cav-artist)
+# fast / budget mode (the storyboarder runs at medium effort; everything else unchanged)
 Fast and cheap: animate script.txt + voice.wav in style_bible.json, a quick draft is fine
 
 # iterative review: answer the Ship it / Change it questions, or just say it
@@ -87,7 +104,8 @@ Change it: the face in the second shot looks too long, and make the music quiete
 ```
 
 You will be asked "Ship it or change it?" after QA passes. Parametric changes (framing, subtitles, ±3 dB sound) are applied and
-only the affected shots/audio are rebuilt; art or cut notes go to the director/artist for just those shots. *Ship it* keeps only
+only the affected shots/audio are rebuilt; art or cut notes go to the storyboarder (Opus) and then to the artist/timeline
+(Sonnet) for just the changed scenes. *Ship it* keeps only
 the video and removes the private runtime.
 
 **Standalone CLI (no Claude needed for the mechanical stages):** everything below still works as before, and `--auto` renders
@@ -104,12 +122,12 @@ python3 scripts/build_video.py --script script.txt --audio voice.wav --style sty
 python3 scripts/build_video.py --script script.txt --audio voiceover.wav --style style_bible.json \
         --out myfilm/final_video.mp4 --stage analyze
 
-# 2) direct + draw: write myfilm/storyboard.json and myfilm/scene_drawers.js (Claude does this; see SKILL.md)
+# 2) direct + draw: write myfilm/storyboard.json and myfilm/drawers/ (_common.js + <scene>.js; Claude does this, see SKILL.md)
 #    quick looks while drawing:  ... --frames 30,110,160
 
 # 3) build (incremental: only changed shots / audio are redone)
 python3 scripts/build_video.py --script script.txt --audio voiceover.wav --style style_bible.json \
-        --storyboard myfilm/storyboard.json --drawers myfilm/scene_drawers.js \
+        --storyboard myfilm/storyboard.json --drawers myfilm/drawers \
         --aspect 16:9 --subtitles true [--bgm music.mp3] --out myfilm/final_video.mp4
 
 # 4) review gate: in a terminal you are asked "Ship it / Change it" right away.
@@ -124,7 +142,7 @@ python3 scripts/build_video.py --out myfilm/final_video.mp4 --ship
 | flag | default | |
 |---|---|---|
 | `--script` / `--audio` / `--style` | required on first build | `.txt/.md`, `.wav/.mp3`, any style bible (remembered afterwards) |
-| `--storyboard` / `--drawers` | `<workdir>/storyboard.json`, `<workdir>/scene_drawers.js` | |
+| `--storyboard` / `--drawers` | `<workdir>/storyboard.json`, `<workdir>/drawers/` (else `scene_drawers.js`) | drawers dir = `_common.js` + one `<scene>.js` per scene; each shot is cached against only its own scene file |
 | `--bgm` | auto | file > `storyboard.bgm.path` > `assets/bgm/*` > procedural modal drone |
 | `--aspect` / `--subtitles` | `16:9` / storyboard | `9:16` renders 1080×1920; karaoke captions in the style's colours |
 | `--out` / `--workdir` | `final_video.mp4` / its folder | |
@@ -194,11 +212,11 @@ names listed in `examples/test_project/README.md`. To try the pipeline with any 
 ```
 custom-animated-video/
 ├── SKILL.md  README.md  requirements.txt
-├── agents/      cav-ingest  cav-director  cav-artist  cav-artist-fast  cav-builder  cav-qa-critic  (.md subagents)
-├── references/  style_schema.json  storyboard_schema.json  art_reference.md
+├── agents/      cav-ingest  cav-storyboarder  cav-timeline  cav-artist  cav-builder  cav-qa-critic  (.md subagents)
+├── references/  style_schema.json  storyboard_schema.json  art_reference.md  visual_spec_template.md
 ├── scripts/     normalize_style.py  analyze_audio.py  render_frames.js  canvas_runtime.js
 │                sfx_synth.py  mix_audio.py  build_video.py  review.py  runtime.py
-├── examples/    generic_drawers.js  test_project/{README.md, script.txt, storyboard.json, scene_drawers.js}
+├── examples/    generic_drawers.js  test_project/{README.md, script.txt, storyboard.json, drawers/, visual_specs/}
 ├── .runtime/    (created on first run, deleted on ship: venv, model, browser, ffmpeg)
 └── assets/      sfx/  bgm/   (drop recordings here to override procedural sound)
 ```

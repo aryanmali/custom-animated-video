@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://custom-animated-video/storyboard_schema.json",
-  "title": "storyboard.json — shot-by-shot director plan",
+  "title": "storyboard.json — shot-by-shot plan (creative fields by cav-storyboarder, timing + sfx by cav-timeline)",
   "type": "object",
   "required": ["shots"],
   "properties": {
@@ -10,7 +10,7 @@
     "aspect": { "enum": ["16:9", "9:16", "1:1"], "default": "16:9", "description": "16:9 = 1920x1080, 9:16 = 1080x1920. --aspect on the CLI overrides." },
     "duration_sec": { "type": "number", "description": "defaults to the voiceover duration from audio_timeline.json" },
     "audio_timeline": { "type": "string", "description": "path relative to this file" },
-    "drawers": { "type": "string", "description": "scene_drawers.js path relative to this file (or pass --drawers)" },
+    "drawers": { "type": "string", "description": "drawers/ directory (preferred: _common.js + one <scene>.js per scene key) or a single scene_drawers.js, relative to this file (or pass --drawers)" },
     "subtitles": { "type": "boolean", "default": false },
     "post": { "type": "boolean", "default": true, "description": "false disables the style post stack (debug only)" },
     "shots": {
@@ -20,8 +20,8 @@
         "required": ["start_sec", "end_sec", "scene"],
         "properties": {
           "id": { "type": "string" },
-          "start_sec": { "type": "number" }, "end_sec": { "type": "number", "description": "shots must tile the timeline: next.start_sec == this.end_sec" },
-          "scene": { "type": "string", "description": "key registered by scene_drawers.js via CAV.registerScenes" },
+          "start_sec": { "type": "number" }, "end_sec": { "type": "number", "description": "shots must tile the timeline: next.start_sec == this.end_sec. Keep shots 1.5-4 s (small shots = small re-renders)" },
+          "scene": { "type": "string", "description": "key registered via CAV.registerScenes; with a drawers/ directory it lives in drawers/<scene>.js and has a spec in visual_specs/<scene>.md" },
           "mood": { "type": "string", "description": "one of the style's lighting_moods (exactly one per shot)" },
           "camera": {
             "type": "object",
@@ -47,7 +47,8 @@
           "parallax": { "type": "object", "description": "per-shot override of layer depths" },
           "haze": { "type": "object", "description": "per-shot override of per-layer haze" },
           "speaker": { "type": ["string", "null"], "description": "who is speaking on screen (drives the QA dialogue pick; drawers read F.mouth)" },
-          "beat": { "type": "string", "description": "director's note: why this shot, which line / pause it serves" }
+          "beat": { "type": "string", "description": "director's note: why this shot, which line / pause it serves" },
+          "sound_intent": { "type": "array", "items": { "type": "string" }, "description": "storyboarder's sound plan, converted to sfx_events/ambience by cav-timeline. Tokens: walk[:surface], whoosh_in, whoosh@<t_sec>, chime_reveal@<t_sec>[:temple_bell|chime|singing_bowl], chime_end, swell_to_cut, ambience:<bed>" }
         }
       }
     },

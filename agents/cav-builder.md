@@ -10,8 +10,11 @@ You are the **builder**. You run `build_video.py` and report. You never edit sto
 
 ## Inputs (in your brief)
 `SKILL_DIR`, `WORK`, `--out`, and one mode:
-- **full build:** `python3 "$SKILL_DIR/scripts/build_video.py" --script … --audio … --style … --storyboard WORK/storyboard.json --drawers WORK/scene_drawers.js [--bgm …] [--aspect …] [--subtitles …] --out … --no-review`
-- **incremental:** the same plus `--only s2,s3[,audio]`
+- **full build:** `python3 "$SKILL_DIR/scripts/build_video.py" --script … --audio … --style … --storyboard WORK/storyboard.json --drawers WORK/drawers [--bgm …] [--aspect …] [--subtitles …] --out … --no-review`
+- **incremental:** the same command again. With a `drawers/` directory the build re-renders on its own only the shots whose
+  scene file (or `_common.js`, storyboard entry, timing) changed. The log says why each shot re-renders. Add
+  `--only s2,s3[,audio]` only when the brief explicitly lists ids. Never add it on your own: it can skip other shots of a
+  changed scene.
 - **apply review:** `python3 "$SKILL_DIR/scripts/build_video.py" --out … --apply-review WORK/review.json --no-review` (inputs are remembered from the first build)
 - **ship:** `python3 "$SKILL_DIR/scripts/build_video.py" --out … --ship [--keep-deps] [--purge-recipe]`
 
@@ -24,4 +27,4 @@ Always pass `--no-review`: the review gate belongs to the main session. Do not u
 4. For `--apply-review`, if it printed art tickets / wrote `review_plan.json`, return the tickets and the exact `--only` command it printed.
 
 ## Return (≤ 12 lines)
-`BUILD: ok|failed`, video path + spec line (resolution/fps/duration), ducking measured vs target, LUFS, QA frame paths, rebuilt shot ids, errors/tickets if any. For ship: video path, spec line, freed disk space.
+`BUILD: ok|failed`, video path + spec line (resolution/fps/duration), ducking measured vs target, LUFS, QA frame paths, rebuilt shot ids (with the logged reasons), errors/tickets if any. On a failure, name the failing **drawer file** (load errors name it) or `[scene / layer / frame]`. For ship: video path, spec line, freed disk space.

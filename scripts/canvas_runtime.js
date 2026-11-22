@@ -799,7 +799,7 @@
     CAV._ctx = cv.getContext('2d', { willReadFrequently: true });
     CAV._shots = (CAV.SB.shots || []).slice().sort((a, b) => a.start_sec - b.start_sec);
     const missing = CAV._shots.map(s => s.scene).filter(s => !scenes[s]);
-    if (missing.length) throw new Error('scene_drawers.js does not define scene(s): ' + [...new Set(missing)].join(', ') + ' (defined: ' + Object.keys(scenes).join(', ') + ')');
+    if (missing.length) throw new Error('drawers do not define scene(s) (expected drawers/<scene>.js registering them): ' + [...new Set(missing)].join(', ') + ' (defined: ' + Object.keys(scenes).join(', ') + ')');
     const missMood = CAV._shots.map(s => s.mood).filter(m => m && !CAV.style.lighting_moods[m]);
     if (missMood.length) throw new Error('unknown mood(s) ' + missMood.join(', ') + '; style has ' + Object.keys(CAV.style.lighting_moods).join(', '));
     return { shots: CAV._shots.length, scenes: Object.keys(scenes), W: cv.width, H: cv.height };

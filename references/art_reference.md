@@ -1,6 +1,9 @@
 # Art reference: CAV primitives, frame object, coordinates
 
-Read by `cav-artist` / `cav-artist-fast`. Rules live in the agent files; this is the API.
+Read by `cav-artist`. Rules live in the agent file; what to draw comes from `WORK/visual_specs/*.md`; this is the API.
+
+**File layout:** `WORK/drawers/_common.js` (shared rig/helpers exported on `CAV.lib.<project>`, loaded first) + one
+`WORK/drawers/<scene_key>.js` per scene, each registering exactly that key. Example: `examples/test_project/drawers/`.
 
 ```js
 (function () {
@@ -45,6 +48,6 @@ shadow_tint,rim,ink,ambient,glow,name}, S` (normalized style), `light` (unit vec
 **Iterate cheaply:** render 3–4 frames, look, fix, repeat (uses the private runtime; frames land in `WORK/preview_frames/`):
 ```bash
 python3 "$SKILL_DIR/scripts/build_video.py" --script script.txt --audio voiceover.wav --style style_bible.json \
-        --storyboard storyboard.json --drawers scene_drawers.js --out project/final_video.mp4 --frames 30,110,160
+        --storyboard storyboard.json --drawers drawers --out project/final_video.mp4 --frames 30,110,160
 ```
-Errors name the scene/layer/frame (`[scene ghat_closeup / layer action_plane / frame 110] …`).
+Load errors name the drawer file; draw errors name the scene/layer/frame (`[scene ghat_closeup / layer action_plane / frame 110] …`).

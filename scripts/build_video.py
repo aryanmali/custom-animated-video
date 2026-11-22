@@ -2,11 +2,11 @@
 """custom-animated-video — end-to-end CLI orchestrator (self-contained: run it with any python3 >= 3.9).
 
   script + voiceover + style_bible.json -> normalized style -> audio_timeline.json -> storyboard.json (you direct)
-  -> scene_drawers.js (you draw) -> stems + ducked/mastered audio -> per-shot clips (frames deleted as soon as each
+  -> drawers/ (one JS file per scene + _common.js; or a single scene_drawers.js) -> stems + ducked/mastered audio -> per-shot clips (frames deleted as soon as each
   clip is encoded) -> final MP4 -> QA keyframes -> auto-clean -> REVIEW GATE: ship it or change it
 
 build:   python3 build_video.py --script script.txt --audio voiceover.wav --style style_bible.json \
-             [--storyboard storyboard.json --drawers scene_drawers.js] [--bgm music.mp3] [--aspect 16:9|9:16] \
+             [--storyboard storyboard.json --drawers drawers/] [--bgm music.mp3] [--aspect 16:9|9:16] \
              [--subtitles true|false] [--out final_video.mp4] [--only s2,s3,audio] [--preview] [--auto]
 analyse: ... --stage analyze          (stops after the timeline + draft storyboard)
 change:  python3 build_video.py --out final_video.mp4 --apply-review review.json
@@ -14,7 +14,8 @@ ship:    python3 build_video.py --out final_video.mp4 --ship [--keep-deps] [--pu
 check:   python3 build_video.py --check   (also registers the cav-* subagents in ~/.claude/agents/)
 
 Rebuilds are incremental: every shot and the audio mix carry a content hash in build_state.json, so a rerun only
-re-renders what changed. --only limits a rerun to the listed shot ids and/or "audio" (and accepts the rest as-is).
+re-renders what changed. With a drawers/ directory each shot is hashed against _common*.js + its own
+<scene>.js only, so editing one scene file re-renders only the shots that use that scene. --only limits a rerun to the listed shot ids and/or "audio" (and accepts the rest as-is).
 First run installs private dependencies into <skill>/.runtime (see runtime.py); "ship" deletes them again.
 """
 import argparse, glob, hashlib, json, math, os, re, shutil, subprocess, sys, time
@@ -30,6 +31,8 @@ GENERATED = ["clips", "frames", "qa", "audio_stems", "master_audio.wav", "mix_re
              "style.normalized.json", "storyboard.draft.json", "storyboard.prev.json", "build_state.json", "review.json",
              "review_plan.json", "concat.txt", "preview_frames"]
 SCRATCH = ["frames", "audio_stems", "concat.txt", "preview_frames"]  # deleted automatically after every successful build
+RECIPE_EXTRA = ["visual_specs", "known_flaws.md"]  # kept on ship (with storyboard + drawers) unless --purge-recipe
+OBSOLETE_AGENTS = ["cav-artist-fast.md", "cav-director.md"]  # replaced in v2; removed from ~/.claude/agents on sync
 
 
 def log(msg):
@@ -57,7 +60,7 @@ def h(*parts):
 
 
 def fhash(path):
-    if not path or not os.path.exists(path):
+    if not path or not os.path.isfile(path):
         return None
     return hashlib.sha1(open(path, "rb").read()).hexdigest()[:16]
 
@@ -87,6 +90,36 @@ def ff_info(path):
            (f", {aud.group(1)} {aud.group(2)} Hz" if aud else "") + (f", {dur.group(1)}" if dur else "")
 
 
+# ------------------------------------------------------------------------------------------------- modular drawers
+def drawer_files(drawers):
+    """Load order for a drawers/ directory: _common*.js first, then the rest sorted (render_frames.js uses the same)."""
+    fs = sorted(f for f in glob.glob(os.path.join(drawers, "*.js")) if os.path.isfile(f))
+    return [f for f in fs if os.path.basename(f).startswith("_common")] + \
+           [f for f in fs if not os.path.basename(f).startswith("_common")]
+
+
+def drawer_hashes(drawers, scene_keys):
+    """-> (common_hash, {scene_key: hash}). Single file: everything is 'common' (old behaviour).
+    Directory: <scene>.js files hash per scene; _common*.js and any file that is not a scene key hash as common."""
+    if not os.path.isdir(drawers):
+        return fhash(drawers), {}
+    common, per = [], {}
+    for f in drawer_files(drawers):
+        stem = os.path.splitext(os.path.basename(f))[0]
+        if stem in scene_keys:
+            per[stem] = fhash(f)
+        else:
+            common.append((os.path.basename(f), fhash(f)))
+    return h(common), per
+
+
+def _scene_why(shot, prev, old, new):
+    old = old or [None, None]
+    if old[:1] != new[:1]:
+        return f"scene {shot.get('scene')} changed"
+    return f"crossfade-in draws scene {prev.get('scene') if prev else '?'}, which changed"
+
+
 # ----------------------------------------------------------------------------------------- subagent registration
 def sync_agents():
     """Copy <skill>/agents/cav-*.md into ~/.claude/agents/ (or $CLAUDE_CONFIG_DIR/agents/) when missing or changed.
@@ -105,6 +138,11 @@ def sync_agents():
                 os.makedirs(dst, exist_ok=True)
                 shutil.copyfile(f, target)
                 updated.append(name)
+        for name in OBSOLETE_AGENTS:  # only the exact names this skill used to ship
+            target = os.path.join(dst, name)
+            if os.path.isfile(target) and not os.path.exists(os.path.join(src, name)):
+                os.remove(target)
+                updated.append(f"-{name}")
         if updated:
             log(f"registered subagents in {dst}: {', '.join(updated)} (restart/reload Claude Code if they are not yet listed)")
         return updated
@@ -165,8 +203,9 @@ def qa_frames(sb, tl, out_video, total, fps, qa_dir):
     t_open = (max(seg["start_sec"], first["start_sec"]) + min(seg["end_sec"], first["end_sec"])) / 2 if seg else first["start_sec"] + (first["end_sec"] - first["start_sec"]) * 0.4
     picks = {"opening": min(total - 1, int(t_open * fps)), "dialogue": min(total - 1, int((talk["start_sec"] + talk["end_sec"]) / 2 * fps)),
              "ending": max(0, total - 6)}
-    shutil.rmtree(qa_dir, ignore_errors=True)
     os.makedirs(qa_dir, exist_ok=True)
+    for f in glob.glob(os.path.join(qa_dir, "*.png")):  # keep tickets_r<N>.json: later QA rounds read earlier ones
+        os.remove(f)
     out = {}
     for name, i in picks.items():
         dst = os.path.join(qa_dir, f"{name}_f{i:05d}.png")
@@ -201,7 +240,7 @@ def ship(work, out, purge_recipe, keep_deps, recipe_paths):
             freed += rm(p)
     if purge_recipe:
         for p in recipe_paths:
-            if p and os.path.exists(p) and os.path.realpath(os.path.dirname(p)) == os.path.realpath(work):
+            if p and os.path.exists(p) and os.path.realpath(os.path.dirname(p.rstrip(os.sep))) == os.path.realpath(work):
                 freed += rm(p)
     dep = 0 if keep_deps else runtime.delete_runtime()
     log(f"SHIPPED: {out} ({human(os.path.getsize(out))}{', ' + info if info else ''})")
@@ -256,7 +295,7 @@ def main():
     ap.add_argument("--apply-review", metavar="REVIEW_JSON", help="apply ship/change answers, then rebuild only what they touch")
     ap.add_argument("--ship", action="store_true", help="keep only the final video; delete intermediates + dependencies")
     ap.add_argument("--keep-deps", action="store_true", help="with --ship: keep <skill>/.runtime")
-    ap.add_argument("--purge-recipe", action="store_true", help="with --ship: also delete storyboard.json + scene_drawers.js")
+    ap.add_argument("--purge-recipe", action="store_true", help="with --ship: also delete the recipe (storyboard.json, drawers/, visual_specs/, known_flaws.md)")
     ap.add_argument("--clean", action="store_true", help="delete scratch files only (frames, stems)")
     ap.add_argument("--frames", help="quick look: render only these frame numbers (e.g. 30,110,160) to WORK/preview_frames")
     ap.add_argument("--check", action="store_true")
@@ -268,13 +307,15 @@ def main():
     state = json.load(open(state_path)) if os.path.exists(state_path) else {}
     prev_in = state.get("inputs", {})
     sb_path = os.path.abspath(a.storyboard) if a.storyboard else prev_in.get("storyboard") or os.path.join(work, "storyboard.json")
-    drawers = os.path.abspath(a.drawers) if a.drawers else prev_in.get("drawers") or os.path.join(work, "scene_drawers.js")
+    drawers = os.path.abspath(a.drawers) if a.drawers else prev_in.get("drawers") or (
+        os.path.join(work, "drawers") if os.path.isdir(os.path.join(work, "drawers")) else os.path.join(work, "scene_drawers.js"))
+    recipe = [sb_path, drawers] + [os.path.join(work, n) for n in RECIPE_EXTRA]
 
     sync_agents()                  # keep ~/.claude/agents/cav-*.md current (silent unless it changed something)
 
     # actions that need no dependencies
     if a.ship:
-        return ship(work, out, a.purge_recipe, a.keep_deps, [sb_path, drawers])
+        return ship(work, out, a.purge_recipe, a.keep_deps, recipe)
     if a.clean:
         return log(f"cleaned {human(auto_clean(work))}")
 
@@ -316,7 +357,8 @@ def main():
     state.setdefault("inputs", {}).update({"script": a.script, "audio": a.audio, "style": a.style, "bgm": a.bgm})
 
     # 2 — storyboard (+ review application)
-    if not os.path.exists(sb_path) or not os.path.exists(drawers):
+    drawers_ok = os.path.isfile(drawers) or (os.path.isdir(drawers) and bool(drawer_files(drawers)))
+    if not os.path.exists(sb_path) or not drawers_ok:
         draft = draft_storyboard(tl, style, a.aspect or "16:9", boolish(a.subtitles) if a.subtitles is not None else True,
                                  os.path.relpath(os.path.join(SKILL, "examples", "generic_drawers.js"), work))
         dpath = os.path.join(work, "storyboard.draft.json")
@@ -324,8 +366,8 @@ def main():
         if not a.auto:
             json.dump(state, open(state_path, "w"), indent=1)
             log(f"analysis done. Draft storyboard: {dpath}")
-            log("NEXT: direct the film — write storyboard.json + scene_drawers.js (SKILL.md §2–3), then rerun with "
-                "--storyboard storyboard.json --drawers scene_drawers.js   (or --auto for the generic landscape)")
+            log("NEXT: direct the film — write storyboard.json + drawers/<scene>.js (SKILL.md §2–4), then rerun with "
+                "--storyboard storyboard.json --drawers drawers/   (or --auto for the generic landscape)")
             return
         sb_path, drawers = dpath, os.path.join(SKILL, "examples", "generic_drawers.js")
         log("--auto: rendering the draft storyboard with the generic, style-only drawers")
@@ -350,7 +392,7 @@ def main():
         import review
         rv = json.load(open(a.apply_review))
         if rv.get("decision") == "ship":
-            return ship(work, out, a.purge_recipe, a.keep_deps, [sb_path, drawers])
+            return ship(work, out, a.purge_recipe, a.keep_deps, recipe)
         shutil.copy(sb_path, os.path.join(work, "storyboard.prev.json"))
         sb, plan = review.apply(rv, sb)
         json.dump(sb, open(sb_path, "w"), indent=2)
@@ -360,7 +402,8 @@ def main():
             json.dump(plan, open(os.path.join(work, "review_plan.json"), "w"), indent=1)
             log("NEEDS AN ART/EDIT PASS before rebuilding (written to review_plan.json):")
             for t in plan["todo"]:
-                print(f"    • {t['part']}: shots {t['shots']} issues {t['issues']} notes {t['notes']!r}\n      -> {t['action']}")
+                print(f"    • {t['part']}: shots {t['shots']} issues {t['issues']} notes {t['notes']!r}\n      -> {t['action']}"
+                      + (f"\n      agent: {t['agent']}" if t.get("agent") else ""))
             log(f"after editing, rebuild with:  build_video.py --out \"{out}\" --only " + ",".join(plan["only"]))
             state.setdefault("inputs", {}).update({"storyboard": sb_path, "drawers": drawers})
             json.dump(state, open(state_path, "w"), indent=1)
@@ -401,16 +444,20 @@ def main():
 
     # 4 — per-shot clips: render frames -> encode clip -> delete frames
     ranges = shot_ranges(sb, fps, total)
+    d_common, d_scene = drawer_hashes(drawers, {s.get("scene") for s in sb["shots"]})
     glob_h = h(fps, aspect, subtitles, sb.get("subtitle_style"), dur, sb.get("post"), scale, fhash(style_n), fhash(tl_path),
-               fhash(drawers), fhash(S("canvas_runtime.js")))
+               d_common, fhash(S("canvas_runtime.js")))
     clips_dir = os.path.join(work, "clips"); os.makedirs(clips_dir, exist_ok=True)
     old_shots = state.get("shots", {})
-    new_shots, todo = {}, []
+    new_shots, todo, why = {}, [], {}
     for k, s in enumerate(sb["shots"]):
         sid = s.get("id") or f"shot{k + 1}"
         prev = sb["shots"][k - 1] if k and (s.get("transition_in") or {}).get("type") not in (None, "cut") else None
         clip = os.path.join(clips_dir, f"{k:03d}_{sid}.mp4")
-        new_shots[sid] = {"hash": h(glob_h, s, prev, ranges[k]), "clip": clip, "range": ranges[k]}
+        # a crossfade-in shot also draws the previous shot's scene
+        sc_h = [d_scene.get(s.get("scene"))] + ([d_scene.get(prev.get("scene"))] if prev else [])
+        new_shots[sid] = {"hash": h(glob_h, s, prev, ranges[k], sc_h), "clip": clip, "range": ranges[k],
+                          "common": glob_h, "scene_hash": sc_h}
         o = old_shots.get(sid, {})
         missing = not os.path.exists(clip) or o.get("clip") != clip or o.get("range") != ranges[k]
         stale = a.force or missing or o.get("hash") != new_shots[sid]["hash"]
@@ -418,16 +465,20 @@ def main():
             stale = sid in only or missing
         if stale:
             todo.append(k)
+            why[k] = ("forced" if a.force else "listed in --only" if only is not None and sid in only else
+                      "new/moved clip" if missing else "common drawers/style/runtime changed" if o.get("common") != glob_h
+                      else _scene_why(s, prev, o.get("scene_hash"), sc_h) if o.get("scene_hash") != sc_h else "shot spec changed")
     for k in list(todo):  # the next shot's incoming transition draws this shot: re-render it too
         nxt = k + 1
         if nxt < len(sb["shots"]) and (sb["shots"][nxt].get("transition_in") or {}).get("type") not in (None, "cut") and nxt not in todo:
             todo.append(nxt)
+            why[nxt] = "crossfade follower of a re-rendered shot"
     todo.sort()
     keep = {v["clip"] for v in new_shots.values()}
     for f in glob.glob(os.path.join(clips_dir, "*.mp4")):  # clips of shots that no longer exist
         if f not in keep:
             os.remove(f)
-    log(f"shots to render: {', '.join(sb['shots'][k].get('id', str(k)) for k in todo) or 'none'} "
+    log(f"shots to render: {', '.join(sb['shots'][k].get('id', str(k)) + ' (' + why.get(k, '?') + ')' for k in todo) or 'none'} "
         f"(reusing {len(sb['shots']) - len(todo)} cached clip(s))")
     for k in todo:
         s = sb["shots"][k]; sid = s.get("id") or f"shot{k + 1}"; a0, b0 = ranges[k]
@@ -485,7 +536,7 @@ def main():
     rpath = os.path.join(work, "review.json")
     json.dump(rv, open(rpath, "w"), indent=1)
     if rv["decision"] == "ship":
-        return ship(work, out, a.purge_recipe, a.keep_deps, [sb_path, drawers])
+        return ship(work, out, a.purge_recipe, a.keep_deps, recipe)
     os.execv(sys.executable, [sys.executable, os.path.abspath(__file__), "--out", out, "--workdir", work, "--apply-review", rpath]
              + (["--preview"] if a.preview else []))
 

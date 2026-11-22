@@ -4,7 +4,7 @@
   "aspect": "16:9",
   "duration_sec": 7.06,
   "audio_timeline": "audio_timeline.json",
-  "drawers": "scene_drawers.js",
+  "drawers": "drawers/",
   "subtitles": true,
   "shots": [
     {
@@ -23,7 +23,12 @@
         "lampsBloom": true
       },
       "beat": "Opening: 'At dusk,' then a held 0.68 s pause (camera hold, lamps swell, bell) before 'the river carries every lamp back home.' Figure walks right-to-left toward the low sun.",
-      "speaker": null
+      "speaker": null,
+      "sound_intent": [
+        "walk:stone",
+        "chime_reveal@0.62:temple_bell",
+        "ambience:river"
+      ]
     },
     {
       "id": "s2_closeup",
@@ -44,7 +49,12 @@
       },
       "params": {},
       "beat": "Reveal on the pause after 'home.': dialogue close-up, the figure says 'Walk slowly.' (lip sync), cloth and hair ripple in the river breeze.",
-      "speaker": "hero"
+      "speaker": "hero",
+      "sound_intent": [
+        "whoosh_in",
+        "swell_to_cut",
+        "ambience:river"
+      ]
     },
     {
       "id": "s3_hero",
@@ -69,7 +79,11 @@
         "arch": false
       },
       "beat": "Climax: low-angle hero shot holding a diya against the shikhara and sky, 'The light remembers you.' Ends on the bell.",
-      "speaker": null
+      "speaker": null,
+      "sound_intent": [
+        "chime_reveal@6.15:temple_bell",
+        "ambience:river"
+      ]
     }
   ],
   "sfx_events": [

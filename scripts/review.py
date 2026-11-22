@@ -126,7 +126,9 @@ def apply(review, sb):
         if part == "visuals":
             only.update(shots)
             todo.append({"part": "visuals", "shots": shots, "issues": ticks, "notes": notes.get("visuals", ""),
-                         "action": "edit scene_drawers.js (and shot params/mood in storyboard.json) for these shots"})
+                         "agent": "cav-storyboarder (targeted: specs/params/mood) -> cav-artist (CHANGED_SCENES only)",
+                         "action": "update visual_specs/<scene>.md (and shot params/mood in storyboard.json), then re-implement "
+                                   "only the changed drawers/<scene>.js files"})
         elif part == "camera":
             for sid in shots:
                 cam = byid[sid].setdefault("camera", {})
@@ -140,6 +142,7 @@ def apply(review, sb):
             only.update(shots)
             if "cuts" in ticks or notes.get("camera"):
                 todo.append({"part": "camera", "shots": shots, "issues": [t for t in ticks if t == "cuts"], "notes": notes.get("camera", ""),
+                             "agent": "cav-storyboarder (targeted: cut points/transitions) -> cav-timeline (re-tile, re-time sfx)",
                              "action": "adjust start_sec/end_sec/transition_in in storyboard.json (cut inside pauses); "
                                        "re-time sfx_events; neighbours of moved cuts are rebuilt automatically"})
                 only.add("audio")
@@ -158,6 +161,7 @@ def apply(review, sb):
             only.update(s.get("id") for s in sb["shots"])  # captions are drawn into every shot
             if notes.get("subtitles"):
                 todo.append({"part": "subtitles", "shots": "all", "issues": [], "notes": notes["subtitles"],
+                             "agent": "cav-storyboarder (targeted: subtitle_style)",
                              "action": "edit storyboard.subtitle_style (font_family, fill, outline, highlight, uppercase, max_words_per_line)"})
         elif part == "sound":
             bg = sb.setdefault("bgm", {"mode": "auto"})
@@ -174,6 +178,7 @@ def apply(review, sb):
             only.add("audio")
             if notes.get("sound"):
                 todo.append({"part": "sound", "shots": shots, "issues": [], "notes": notes["sound"],
+                             "agent": "cav-timeline (review mode)",
                              "action": "edit sfx_events / ambience / bgm in storyboard.json, or pass --bgm <file>; "
                                        "storyboard.mix.duck_db changes ducking depth"})
     return sb, {"only": sorted(only, key=lambda x: (x == "audio", x)), "applied": applied, "todo": todo, "shots": shots}
